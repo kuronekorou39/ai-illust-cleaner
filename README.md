@@ -20,7 +20,30 @@ uv sync
 
 ## 使い方
 
-### ノイズ除去
+### GUI
+```powershell
+uv run python -m gui                          # 起動
+uv run python -m gui samples\sd_img2img.png   # 画像を開いて起動
+```
+- 画像はドラッグ＆ドロップでも開ける（フォルダを落とすと一括処理）
+- 開いた直後は「確認」画面。メタデータの有無と塗り面ノイズの量を見て、処理するかを決める。
+  ノイズ除去は「調整」に進んだときに初めて実行する
+- 「AI判定度」は、公開されているイラスト向け判定モデル2つ（`gui/detector.py`）が出す確率の平均。
+  判定モデル（約178MB）は初回に確認画面からダウンロードし、判定はPCの中で行う。
+  画像の内容だけを見ており、メタデータやノイズの量は含まない。断定はできず、他の判定サービスとは一致しない。
+  手元の生成画像23枚では見逃しが多かった（50%以上と判定したのは4枚と1枚）
+- 確認画面の「メタデータを消して保存」は、画素を変えずにメタデータだけを除く
+- 調整画面の表示は「スライド比較」と「4分割（元・処理後・それぞれのノイズ）」を切り替え
+- ホイールで拡大縮小、ドラッグで移動、ダブルクリックで全体表示
+- スライダーを動かしている間は表示範囲だけを先に処理し、手を離すと全体を処理して指標を更新する。
+  L0 は画像全体を見て最適化するため、先行表示は全体処理の結果と1〜2階調ほど異なる（仮の表示）
+
+見た目の確認用に、各状態のスクリーンショットを `output/gui/` に保存できる:
+```powershell
+uv run tools\gui_shot.py
+```
+
+### ノイズ除去（コマンドライン）
 ```powershell
 uv run denoise.py samples\sd_img2img.png output\clean.png            # 標準
 uv run denoise.py samples\sd_img2img.png output\clean.png --lam 0.001 # 弱め
@@ -74,10 +97,21 @@ uv run tools\inspect_meta.py samples\*.png
 ai-illust-denoise/
 ├─ denoise.py            ノイズ除去本体（CLI）
 ├─ common.py             共通処理（読み込み・ノイズ指標）
+├─ gui/                  GUI（PySide6）
+│  ├─ window.py          メインウィンドウ
+│  ├─ viewer.py          比較ビュー
+│  ├─ inspect.py         確認パネル（AI判定度・メタデータ・ノイズ量）
+│  ├─ detector.py        AI判定度（判定モデルの取得と実行）
+│  ├─ score.py           判定度・ノイズ量の区分と書式
+│  ├─ panel.py           調整パネル
+│  ├─ worker.py          裏で走る処理
+│  ├─ theme.py           配色・スタイル
+│  └─ assets/fonts/      同梱フォント（SIL Open Font License）
 ├─ tools/
 │  ├─ visualize_noise.py ノイズ可視化
 │  ├─ compare.py         処理前後の比較図
-│  └─ inspect_meta.py    PNGメタデータ確認
+│  ├─ inspect_meta.py    PNGメタデータ確認
+│  └─ gui_shot.py        GUIのスクリーンショット撮影
 ├─ samples/              検証用画像
 ├─ output/               出力先（git管理外）
 ├─ pyproject.toml        依存定義

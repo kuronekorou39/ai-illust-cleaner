@@ -11,4 +11,6 @@ dependencies = [
     "scipy",
     "matplotlib",
     "scikit-image",
+    "pyside6>=6.11.2",
+    "onnxruntime>=1.24.3",
 ]

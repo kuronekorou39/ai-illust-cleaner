@@ -16,7 +16,12 @@ import numpy as np
 from PIL import Image, PngImagePlugin
 
 
-def line_mask(rgb, dark=90, grad_th=120):
+DEFAULT_LAM = 0.002    # L0の強さ
+DEFAULT_DARK = 90      # 線とみなす暗さ（これより暗い画素）
+DEFAULT_GRAD = 120     # 線とみなす勾配の強さ
+
+
+def line_mask(rgb, dark=DEFAULT_DARK, grad_th=DEFAULT_GRAD):
     """線（暗い画素＋強い勾配）を検出し、0〜1の重みで返す"""
     g = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
     grad = cv2.magnitude(cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1))
@@ -25,29 +30,49 @@ def line_mask(rgb, dark=90, grad_th=120):
     return cv2.GaussianBlur(m.astype(np.float32), (3, 3), 0)   # 境目をなじませる
 
 
-def clean(rgb, mode='l0', lam=0.002):
+def smooth(rgb, mode='l0', lam=DEFAULT_LAM):
+    """画像全体を平滑化する（線の保護は blend で行う）"""
     if mode == 'l0':   # 面を区分的に平坦化：ノイズ・色ムラに強い
-        f = cv2.ximgproc.l0Smooth(rgb, None, lam, 2.0)
-    else:              # 控えめ：小さな揺らぎだけ除去
-        f = cv2.ximgproc.rollingGuidanceFilter(rgb, d=-1, sigmaColor=10, sigmaSpace=3, numOfIter=4)
-    w = line_mask(rgb)[..., None]
-    out = f.astype(np.float32) * (1 - w) + rgb.astype(np.float32) * w
+        return cv2.ximgproc.l0Smooth(rgb, None, lam, 2.0)
+    # 控えめ：小さな揺らぎだけ除去
+    return cv2.ximgproc.rollingGuidanceFilter(rgb, d=-1, sigmaColor=10, sigmaSpace=3, numOfIter=4)
+
+
+def blend(rgb, smoothed, mask):
+    """線マスクの重みで、線は元画像・それ以外は平滑化結果を採用する"""
+    w = mask[..., None]
+    out = smoothed.astype(np.float32) * (1 - w) + rgb.astype(np.float32) * w
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-def process_file(src, dst, mode, lam, strip_meta):
+def clean(rgb, mode='l0', lam=DEFAULT_LAM, dark=DEFAULT_DARK, grad_th=DEFAULT_GRAD):
+    return blend(rgb, smooth(rgb, mode, lam), line_mask(rgb, dark, grad_th))
+
+
+def load_image(src):
+    """(元画像のメタデータ, RGB配列, アルファ配列 or None) を返す"""
     pil = Image.open(src)
     rgba = np.asarray(pil.convert('RGBA'))
-    out = clean(np.ascontiguousarray(rgba[..., :3]), mode, lam)
-    if 'A' in pil.getbands():
-        out = np.dstack([out, rgba[..., 3]])
+    alpha = rgba[..., 3] if 'A' in pil.getbands() else None
+    return dict(pil.info), np.ascontiguousarray(rgba[..., :3]), alpha
+
+
+def save_png(out, alpha, meta, dst, strip_meta=False):
+    """処理結果をPNGで保存する。meta は load_image が返したメタデータ"""
+    if alpha is not None:
+        out = np.dstack([out, alpha])
     info = PngImagePlugin.PngInfo()
     if not strip_meta:
-        for k, v in pil.info.items():
+        for k, v in meta.items():
             if isinstance(v, str):
                 info.add_text(k, v)
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(out).save(dst, pnginfo=info)
+
+
+def process_file(src, dst, mode, lam, strip_meta, dark=DEFAULT_DARK, grad_th=DEFAULT_GRAD):
+    meta, rgb, alpha = load_image(src)
+    save_png(clean(rgb, mode, lam, dark, grad_th), alpha, meta, dst, strip_meta)
     print(f'{src} -> {dst}')
 
 
@@ -56,7 +81,7 @@ def main():
     ap.add_argument('src', help='入力画像 or フォルダ')
     ap.add_argument('dst', help='出力画像 or フォルダ')
     ap.add_argument('--mode', choices=['l0', 'soft'], default='l0')
-    ap.add_argument('--lam', type=float, default=0.002, help='L0の強さ（大きいほどベタ寄り）')
+    ap.add_argument('--lam', type=float, default=DEFAULT_LAM, help='L0の強さ（大きいほどベタ寄り）')
     ap.add_argument('--strip-meta', action='store_true', help='PNGメタデータを引き継がない')
     a = ap.parse_args()
 

@@ -3,6 +3,9 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
+# AI生成ツールが書き込むPNGメタデータのキー（A1111の parameters、ComfyUIの prompt/workflow 等）
+AI_META_KEYS = ('parameters', 'prompt', 'workflow', 'Comment', 'Software')
+
 _CANDIDATES = ['Yu Gothic', 'Meiryo', 'Hiragino Sans', 'Noto Sans CJK JP']
 
 
@@ -13,7 +16,11 @@ def _pick_jp_font():
     return [n for n in _CANDIDATES if n in names][:1] + ['sans-serif']
 
 
-JP_FONTS = _pick_jp_font()
+def __getattr__(name):
+    # matplotlib を使わない呼び出し元（GUI等）で読み込まないよう、参照時に解決する
+    if name == 'JP_FONTS':
+        return _pick_jp_font()
+    raise AttributeError(name)
 
 
 def load_rgb_on_white(path):
