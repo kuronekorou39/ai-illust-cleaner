@@ -1,0 +1,14 @@
+[project]
+name = "ai-illust-denoise"
+version = "0.1.0"
+description = "AI生成イラストの塗り面ノイズを線を保ったまま除去するツール"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-contrib-python>=4.8",
+    "numpy",
+    "pillow",
+    "scipy",
+    "matplotlib",
+    "scikit-image",
+]
