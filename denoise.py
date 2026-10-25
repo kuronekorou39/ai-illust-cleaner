@@ -7,9 +7,12 @@
   python denoise.py 入力.png 出力.png --mode soft      # 控えめ（小さな揺らぎだけ除去）
   python denoise.py 入力フォルダ 出力フォルダ          # フォルダ一括処理
   python denoise.py 入力.png 出力.png --strip-meta     # PNGメタデータを引き継がない
+  python denoise.py 入力.png 出力.png --cutout         # 単色の背景を透明にする
 """
 import argparse
 from pathlib import Path
+
+from cutout import DEFAULT_TOLERANCE, cutout, merge_alpha
 
 import cv2
 import numpy as np
@@ -70,9 +73,14 @@ def save_png(out, alpha, meta, dst, strip_meta=False):
     Image.fromarray(out).save(dst, pnginfo=info)
 
 
-def process_file(src, dst, mode, lam, strip_meta, dark=DEFAULT_DARK, grad_th=DEFAULT_GRAD):
+def process_file(src, dst, mode, lam, strip_meta, dark=DEFAULT_DARK, grad_th=DEFAULT_GRAD,
+                 transparent=False, tolerance=DEFAULT_TOLERANCE):
     meta, rgb, alpha = load_image(src)
-    save_png(clean(rgb, mode, lam, dark, grad_th), alpha, meta, dst, strip_meta)
+    out = clean(rgb, mode, lam, dark, grad_th)
+    if transparent:   # ノイズを取って背景が平坦になった後の方が、きれいに抜ける
+        out, cut, _ = cutout(out, tolerance)
+        alpha = merge_alpha(cut, alpha)
+    save_png(out, alpha, meta, dst, strip_meta)
     print(f'{src} -> {dst}')
 
 
@@ -83,14 +91,18 @@ def main():
     ap.add_argument('--mode', choices=['l0', 'soft'], default='l0')
     ap.add_argument('--lam', type=float, default=DEFAULT_LAM, help='L0の強さ（大きいほどベタ寄り）')
     ap.add_argument('--strip-meta', action='store_true', help='PNGメタデータを引き継がない')
+    ap.add_argument('--cutout', action='store_true', help='単色の背景を透明にする')
+    ap.add_argument('--tolerance', type=int, default=DEFAULT_TOLERANCE,
+                    help='背景色とみなす色の差（0〜255）。省略時は背景のばらつきから自動で決める')
     a = ap.parse_args()
 
     src, dst = Path(a.src), Path(a.dst)
+    opts = dict(transparent=a.cutout, tolerance=a.tolerance)
     if src.is_dir():
         for p in sorted(src.glob('*.png')):
-            process_file(p, dst / f'{p.stem}_clean.png', a.mode, a.lam, a.strip_meta)
+            process_file(p, dst / f'{p.stem}_clean.png', a.mode, a.lam, a.strip_meta, **opts)
     else:
-        process_file(src, dst, a.mode, a.lam, a.strip_meta)
+        process_file(src, dst, a.mode, a.lam, a.strip_meta, **opts)
 
 
 if __name__ == '__main__':

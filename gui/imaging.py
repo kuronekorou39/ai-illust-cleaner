@@ -10,6 +10,8 @@ NOISE_FULL_SCALE = 3.0    # ノイズマップで最大輝度になるノイズ�
 LINE_HINT_BASE = 16       # ノイズマップの地の明るさ
 LINE_HINT_GAIN = 0.10     # ノイズマップにうっすら重ねる線画の濃さ
 MASK_OVERLAY_ALPHA = 150  # 線マスク表示の最大不透明度
+CHECKER_CELL = 12         # 透明部分を示す市松模様の1マス（画像の画素数）
+CHECKER_COLORS = (72, 96)   # 白い縁の残りが分かるよう暗めにする
 
 
 def composite_on_white(rgb, alpha):
@@ -18,6 +20,16 @@ def composite_on_white(rgb, alpha):
         return rgb
     a = alpha.astype(np.float32)[..., None] / 255
     return np.round(rgb.astype(np.float32) * a + 255 * (1 - a)).astype(np.uint8)
+
+
+def composite_on_checker(rgb, alpha, origin=(0, 0)):
+    """透明部分を市松模様の上に合成する。origin は切り出し位置（模様を全体とそろえるため）"""
+    h, w = alpha.shape
+    yy, xx = np.mgrid[origin[1]:origin[1] + h, origin[0]:origin[0] + w]
+    dark, light = CHECKER_COLORS
+    board = np.where(((yy // CHECKER_CELL + xx // CHECKER_CELL) % 2)[..., None].astype(bool), dark, light)
+    a = alpha.astype(np.float32)[..., None] / 255
+    return np.round(rgb.astype(np.float32) * a + board * (1 - a)).astype(np.uint8)
 
 
 def noise_view(display):

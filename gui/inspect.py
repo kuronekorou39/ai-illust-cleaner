@@ -221,7 +221,8 @@ class InspectPanel(QFrame):
         self.noise_over.set_value('—')
         self.advice.setText('')
 
-    def set_analysis(self, metrics, probs):
+    def set_analysis(self, metrics, probs, uniform_bg):
+        self.info.setText(self.info.text() + ('　背景 単色' if uniform_bg else '　背景 複雑'))
         self.noise_mean.set_value(f"{metrics['mean']:.3f}")
         self.noise_over.set_value(f"{metrics['over']:.2f}%")
         self.advice.setText(_NOISE_TEXT[score.noise_level(metrics['mean'])])

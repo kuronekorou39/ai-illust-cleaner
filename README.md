@@ -23,7 +23,7 @@ uv sync
 ### GUI
 ```powershell
 uv run python -m gui                          # 起動
-uv run python -m gui samples\sd_img2img.png   # 画像を開いて起動
+uv run python -m gui input\sd_img2img.png   # 画像を開いて起動
 ```
 - 画像はドラッグ＆ドロップでも開ける（フォルダを落とすと一括処理）
 - 開いた直後は「確認」画面。メタデータの有無と塗り面ノイズの量を見て、処理するかを決める。
@@ -33,6 +33,12 @@ uv run python -m gui samples\sd_img2img.png   # 画像を開いて起動
   画像の内容だけを見ており、メタデータやノイズの量は含まない。断定はできず、他の判定サービスとは一致しない。
   手元の生成画像23枚では見逃しが多かった（50%以上と判定したのは4枚と1枚）
 - 確認画面の「メタデータを消して保存」は、画素を変えずにメタデータだけを除く
+- 調整画面の「背景の透過」は、縁の色を背景色とみなし、縁とつながっている同色の部分を透明にする（`cutout.py`）。
+  背景が単色のイラスト向けで、風景などの複雑な背景は対象外。コマンドラインでは `--cutout`。
+  輪郭線が1〜2画素途切れていても、その切れ目から塗りの中（白い紙や羽など）へは透明が広がらない。
+  許容差（背景色とみなす色の差）は既定で自動。白に近い淡い塗りを背景と間違えないよう、背景のばらつきのすぐ上に置く。
+  腕と体の間などの囲まれた背景は「クリックで透明を切り替え」で場所を指定する。
+  自動判定（背景色と同じ色で大きい領域を穴とみなす）もあるが、白い胸などが消えることがあるため既定ではオフ
 - 調整画面の表示は「スライド比較」と「4分割（元・処理後・それぞれのノイズ）」を切り替え
 - ホイールで拡大縮小、ドラッグで移動、ダブルクリックで全体表示
 - スライダーを動かしている間は表示範囲だけを先に処理し、手を離すと全体を処理して指標を更新する。
@@ -45,27 +51,27 @@ uv run tools\gui_shot.py
 
 ### ノイズ除去（コマンドライン）
 ```powershell
-uv run denoise.py samples\sd_img2img.png output\clean.png            # 標準
-uv run denoise.py samples\sd_img2img.png output\clean.png --lam 0.001 # 弱め
-uv run denoise.py samples\sd_img2img.png output\clean.png --lam 0.005 # 強め
-uv run denoise.py samples\sd_img2img.png output\clean.png --mode soft # 控えめ
+uv run denoise.py input\sd_img2img.png output\clean.png            # 標準
+uv run denoise.py input\sd_img2img.png output\clean.png --lam 0.001 # 弱め
+uv run denoise.py input\sd_img2img.png output\clean.png --lam 0.005 # 強め
+uv run denoise.py input\sd_img2img.png output\clean.png --mode soft # 控えめ
 uv run denoise.py 入力フォルダ output                                  # 一括処理
 ```
 生成パラメータなどのPNGメタデータは既定で引き継ぐ。不要なら `--strip-meta`。
 
 ### ノイズの可視化
 ```powershell
-uv run tools\visualize_noise.py samples\sd_img2img.png --crop 300,140,110
+uv run tools\visualize_noise.py input\sd_img2img.png --crop 300,140,110
 ```
 
 ### 処理前後の比較
 ```powershell
-uv run tools\compare.py samples\sd_img2img.png output\clean.png --ref samples\handdrawn.png
+uv run tools\compare.py input\sd_img2img.png output\clean.png --ref input\handdrawn.png
 ```
 
 ### メタデータ確認
 ```powershell
-uv run tools\inspect_meta.py samples\*.png
+uv run tools\inspect_meta.py input\*.png
 ```
 
 ## 仕組み
@@ -76,7 +82,7 @@ uv run tools\inspect_meta.py samples\*.png
 
 ガイデッドフィルタも試したが、ノイズを含む画像自身がガイドになるためノイズが残り、不採用。
 
-## 検証結果（samples/sd_img2img.png）
+## 検証結果（input/sd_img2img.png）
 
 | | 塗り面ノイズ平均 | 1階調超の画素 | SSIM（元画像比） |
 |---|---|---|---|
@@ -97,6 +103,7 @@ uv run tools\inspect_meta.py samples\*.png
 ai-illust-denoise/
 ├─ denoise.py            ノイズ除去本体（CLI）
 ├─ common.py             共通処理（読み込み・ノイズ指標）
+├─ cutout.py             単色の背景を透明にする
 ├─ gui/                  GUI（PySide6）
 │  ├─ window.py          メインウィンドウ
 │  ├─ viewer.py          比較ビュー
@@ -112,7 +119,7 @@ ai-illust-denoise/
 │  ├─ compare.py         処理前後の比較図
 │  ├─ inspect_meta.py    PNGメタデータ確認
 │  └─ gui_shot.py        GUIのスクリーンショット撮影
-├─ samples/              検証用画像
+├─ input/               検証用画像（git管理外）
 ├─ output/               出力先（git管理外）
 ├─ pyproject.toml        依存定義
 ├─ uv.lock               依存のロックファイル

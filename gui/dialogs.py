@@ -5,6 +5,7 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (QDialog, QFileDialog, QGridLayout, QHBoxLayout, QLineEdit,
                                QPlainTextEdit, QProgressBar, QVBoxLayout)
 
+from cutout import cutout, merge_alpha
 from denoise import clean, load_image, save_png
 from .widgets import button, label
 from .winchrome import apply_dark_titlebar
@@ -68,6 +69,9 @@ class BatchThread(QThread):
             try:
                 meta, rgb, alpha = load_image(src)
                 out = clean(rgb, p.mode, p.lam, p.dark, p.grad)
+                if p.cutout:
+                    out, cut, _ = cutout(out, p.tolerance, p.holes)
+                    alpha = merge_alpha(cut, alpha)
                 save_png(out, alpha, meta, self._out_dir / f'{src.stem}{BATCH_SUFFIX}.png', self._strip_meta)
                 ok += 1
             except Exception as e:
@@ -103,8 +107,11 @@ class BatchDialog(_Dialog):
 
         mode = '面を平坦化' if params.mode == 'l0' else '揺らぎだけ除去'
         strength = f'　強さ {params.lam:.4f}' if params.mode == 'l0' else ''
+        tolerance = '自動' if params.tolerance is None else str(params.tolerance)
+        cutout = f'　背景を透明化（許容差 {tolerance}）' if params.cutout else ''
         meta = 'メタデータは引き継がない' if strip_meta else 'メタデータを引き継ぐ'
-        summary = label(f'{mode}{strength}　暗部 {params.dark}　勾配 {params.grad}　{meta}', 'muted')
+        summary = label(f'{mode}{strength}　暗部 {params.dark}　勾配 {params.grad}{cutout}　{meta}', 'muted')
+        summary.setWordWrap(True)
 
         self.status = label('', 'muted')
         self.status.setWordWrap(True)

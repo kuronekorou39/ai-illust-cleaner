@@ -32,6 +32,7 @@ class Viewer(QWidget):
     zoomChanged = Signal(float)
     cursorMoved = Signal(int, int)   # 画像上の座標。画像の外では (-1, -1)
     openRequested = Signal()
+    picked = Signal(int, int)        # 選択モードで画像上をクリックした座標
 
     def __init__(self):
         super().__init__()
@@ -54,6 +55,7 @@ class Viewer(QWidget):
         self._drag = None
         self._drag_from = None
         self._cursor = None   # 画像上のカーソル位置
+        self.pick_mode = False   # クリックした場所を通知するモード（透過の切り替え用）
 
         self.mode_seg = Segmented([('slide', 'スライド比較'), ('quad', '4分割')], floating=True)
         self.view_seg = Segmented([('image', '画像'), ('noise', 'ノイズ')], floating=True)
@@ -125,6 +127,10 @@ class Viewer(QWidget):
     def set_show_mask(self, on):
         self.show_mask = on
         self.update()
+
+    def set_pick_mode(self, on):
+        self.pick_mode = on
+        self.setCursor(Qt.CrossCursor if on else Qt.OpenHandCursor)
 
     def set_busy(self, busy):
         if busy == self._busy:
@@ -266,6 +272,12 @@ class Viewer(QWidget):
             return
         pos = e.position()
         mini = self._minimap_rect()
+        if e.button() == Qt.LeftButton and self.pick_mode:
+            ix, iy = self._to_image(pos)
+            w, h = self._size
+            if 0 <= ix < w and 0 <= iy < h:
+                self.picked.emit(int(ix), int(iy))
+            return
         if e.button() == Qt.LeftButton and mini is not None and mini.contains(pos):
             self._drag = 'minimap'
             self._center_from_minimap(pos, mini)
@@ -292,6 +304,8 @@ class Viewer(QWidget):
             self._fitted = False
         elif self._drag == 'minimap':
             self._center_from_minimap(pos, self._minimap_rect() or QRectF(0, 0, 1, 1))
+        elif self.pick_mode:
+            self.setCursor(Qt.CrossCursor)
         else:
             mini = self._minimap_rect()
             if mini is not None and mini.contains(pos):
@@ -311,7 +325,7 @@ class Viewer(QWidget):
     def mouseReleaseEvent(self, e):
         self._drag = None
         if self.has_image():
-            self.setCursor(Qt.OpenHandCursor)
+            self.setCursor(Qt.CrossCursor if self.pick_mode else Qt.OpenHandCursor)
 
     def mouseDoubleClickEvent(self, e):
         if self.has_image() and not self._near_split(e.position()):

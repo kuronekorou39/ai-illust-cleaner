@@ -2,6 +2,7 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
+from cutout import AUTO_MAX
 from denoise import DEFAULT_DARK, DEFAULT_GRAD, DEFAULT_LAM
 from . import score, theme
 from .widgets import Legend, MetricBars, Segmented, SliderRow, StatTile, button, help_button, label
@@ -12,6 +13,14 @@ LAM_SLIDER_MAX = 50          # 目盛りの数（最大 0.01）
 LAM_PRESETS = (('弱', 0.001), ('標準', 0.002), ('強', 0.005))
 DARK_MAX = 255
 GRAD_MAX = 400
+TOLERANCE_MAX = 64
+CUTOUT_HELP = ('画像の縁の色を背景色とみなし、縁とつながっている同じ色の部分を透明にします。\n'
+               '腕と体の間など、囲まれた背景は「クリックで透明を切り替え」を押してから\n'
+               'その場所をクリックすると透明になります。もう一度クリックすると戻ります。\n'
+               '背景が単色のイラスト向けで、風景などの複雑な背景は対象外です。\n\n'
+               '許容差は「背景色とみなす色の差」です。自動では背景のばらつきのすぐ上に置き、\n'
+               '白に近い淡い塗りを背景と間違えないようにします。\n'
+               '背景の残りが気になるときは上げ、淡い塗りが消えるときは下げてください。')
 
 
 def _lam_to_tick(lam):
@@ -39,7 +48,6 @@ class Panel(QFrame):
     def __init__(self):
         super().__init__()
         self.setObjectName('panel')
-        self.setFixedWidth(theme.PANEL_WIDTH)
 
         # 強さ
         self.lam = SliderRow('強さ', 1, LAM_SLIDER_MAX, _lam_to_tick(DEFAULT_LAM),
@@ -75,6 +83,43 @@ class Panel(QFrame):
         self.show_mask.setCursor(Qt.PointingHandCursor)
         self.show_mask.toggled.connect(self.maskToggled)
 
+        # 背景の透過
+        cutout_head = QHBoxLayout()
+        cutout_head.setSpacing(6)
+        cutout_head.addWidget(label('背景の透過', 'section'))
+        cutout_head.addWidget(help_button(CUTOUT_HELP, '背景の透過の説明'))
+        cutout_head.addStretch(1)
+        self.cutout = QCheckBox('単色の背景を透明にする')
+        self.tolerance = SliderRow('許容差', 0, TOLERANCE_MAX, AUTO_MAX)
+        self.auto_tolerance = QCheckBox('自動')
+        self.holes = QCheckBox('囲まれた背景も自動で透明にする')
+        self.holes.setToolTip('腕と体の間などの、背景色と同じ色で大きい領域を透明にします。\n'
+                              '白い胸など、背景色と同じ色の大きな塗りも消えることがあります。\n'
+                              '確実なのは、下の「クリックで透明を切り替え」で場所を指定する方法です。')
+        self.pick = button('クリックで透明を切り替え', checkable=True)
+        self.pick.setToolTip('押した後、画像上の場所をクリックすると、その部分の透明・不透明が入れ替わります')
+        self.pick_clear = button('切り替えを取り消す', 'link')
+        self.pick_clear.hide()
+        pick_row = QVBoxLayout()
+        pick_row.setSpacing(4)
+        pick_row.addWidget(self.pick)
+        pick_row.addWidget(self.pick_clear, 0, Qt.AlignRight)
+        for box in (self.cutout, self.holes, self.auto_tolerance):
+            box.setCursor(Qt.PointingHandCursor)
+            box.toggled.connect(lambda _: self.changed.emit(False))
+        self.auto_tolerance.setChecked(True)
+        self.cutout.toggled.connect(self._sync_cutout)
+        self.auto_tolerance.toggled.connect(self._sync_cutout)
+        tolerance_row = QHBoxLayout()
+        tolerance_row.addWidget(self.tolerance, 1)
+        tolerance_row.addSpacing(12)
+        tolerance_row.addWidget(self.auto_tolerance, 0, Qt.AlignBottom)
+        self.tolerance.changed.connect(lambda _: self.changed.emit(self.tolerance.slider.isSliderDown()))
+        self.tolerance.released.connect(lambda: self.changed.emit(False))
+        self.bg_note = label('', 'small')
+        self.bg_note.setWordWrap(True)
+        self._sync_cutout(False)
+
         # 結果
         head = QHBoxLayout()
         head.addWidget(label('結果', 'section'))
@@ -102,6 +147,8 @@ class Panel(QFrame):
         lay.addWidget(_section(self.lam, presets))
         lay.addWidget(_section(mode_box))
         lay.addWidget(_section(label('線の保護', 'section'), self.dark, self.grad, self.show_mask))
+        lay.addWidget(_section(cutout_head, self.cutout, tolerance_row, self.holes, pick_row, self.bg_note,
+                               spacing=10))
         results = _section(head, score_row, self.noise_mean, self.noise_over, tiles, spacing=14)
         results.setObjectName('')   # 最後の区切り線は不要
         lay.addWidget(results)
@@ -114,7 +161,35 @@ class Panel(QFrame):
 
     def params(self):
         return Params(self.mode.value(), round(self.lam.value() * LAM_STEP, 6),
-                      self.dark.value(), self.grad.value())
+                      self.dark.value(), self.grad.value(),
+                      self.cutout.isChecked(),
+                      None if self.auto_tolerance.isChecked() else self.tolerance.value(),
+                      self.holes.isChecked())
+
+    def _sync_cutout(self, _=None):
+        on = self.cutout.isChecked()
+        self.auto_tolerance.setEnabled(on)
+        self.holes.setEnabled(on)
+        self.pick.setEnabled(on)
+        if not on:
+            self.pick.setChecked(False)
+        self.tolerance.setEnabled(on and not self.auto_tolerance.isChecked())
+
+    def set_toggle_count(self, n):
+        self.pick_clear.setVisible(n > 0)
+        self.pick_clear.setText(f'切り替えを取り消す（{n}）')
+
+    def show_tolerance(self, value):
+        """自動で決まった許容差をスライダーに反映する（手動に切り替えたとき、そこから調整できる）"""
+        if value is not None and self.auto_tolerance.isChecked():
+            self.tolerance.slider.blockSignals(True)
+            self.tolerance.set_value(value)
+            self.tolerance.value_label.setText(f'自動 {value}')
+            self.tolerance.slider.blockSignals(False)
+
+    def set_background(self, uniform):
+        """背景が単色かどうかで、透過の案内を変える"""
+        self.bg_note.setText('' if uniform else '縁の色がそろっていないため、きれいに抜けない可能性があります。')
 
     def _on_lam(self, _):
         self._sync_presets()

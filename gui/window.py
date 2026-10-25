@@ -1,14 +1,15 @@
 """メインウィンドウ"""
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFileDialog, QFrame, QHBoxLayout, QMainWindow,
-                               QMessageBox, QStackedWidget, QVBoxLayout, QWidget)
+                               QMessageBox, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 
 from denoise import load_image, save_png
 from . import detector, icons, theme
 from .dialogs import BATCH_SUFFIX, BatchDialog, MetaDialog
-from .imaging import mask_to_qimage, to_qimage
+from .imaging import composite_on_checker, mask_to_qimage, to_qimage
 from .inspect import InspectPanel
 from .panel import Panel
 from .viewer import Viewer
@@ -19,8 +20,8 @@ from .worker import (FullProcessor, LatestWorker, PreviewProcessor, Source, anal
 
 APP_NAME = 'ai-illust-denoise'
 NO_META_SUFFIX = '_nometa'   # メタデータだけ消して保存するときの既定のファイル名の末尾
-IMAGE_SUFFIXES = ('.png', '.jpg', '.jpeg', '.webp')
-OPEN_FILTER = '画像 (*.png *.jpg *.jpeg *.webp)'
+IMAGE_SUFFIXES = ('.png', '.jpg', '.jpeg', '.jfif', '.jpe', '.webp', '.bmp', '.gif', '.tif', '.tiff')
+OPEN_FILTER = ('画像 (' + ' '.join(f'*{s}' for s in IMAGE_SUFFIXES) + ');;すべてのファイル (*)')
 FULL_DEBOUNCE_MS = 250    # スライダー操作が止まってから全体処理を始めるまでの待ち
 STATUS_SHOW_MS = 6000     # 保存完了などの一時的なメッセージを出しておく時間
 
@@ -69,6 +70,7 @@ class MainWindow(QMainWindow):
         self.stage = 'inspect'      # 'inspect'（状態の確認）→ 'adjust'（ノイズ除去の調整）
         self._awaiting = False      # 現在の設定での全体処理の結果を待っているか
         self._analyzing = 0         # 実行中の指標計算の数
+        self._toggles = ()          # 透過をクリックで反転させた位置（画像ごと）
         self._download = None       # 実行中の判定モデルのダウンロード
         self._smoothed = (None, None)   # (条件, 平滑化結果)。プレビューで使い回す
 
@@ -94,6 +96,9 @@ class MainWindow(QMainWindow):
         self.panel.changed.connect(self._on_params)
         self.panel.maskToggled.connect(self.viewer.set_show_mask)
         self.inspect.downloadRequested.connect(self.toggle_download)
+        self.panel.pick.toggled.connect(self.viewer.set_pick_mode)
+        self.panel.pick_clear.clicked.connect(self._clear_toggles)
+        self.viewer.picked.connect(self._on_picked)
         self.inspect.metaRequested.connect(self.open_meta)
         self.inspect.stripSaveRequested.connect(self.save_without_meta)
         self.inspect.proceedRequested.connect(lambda: self.set_stage('adjust'))
@@ -184,7 +189,12 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.stack.setFixedWidth(theme.PANEL_WIDTH)
         self.stack.addWidget(self.inspect)
-        self.stack.addWidget(self.panel)
+        self.panel_scroll = QScrollArea()   # 調整パネルは項目が多いので、低い画面では縦に送れるようにする
+        self.panel_scroll.setObjectName('panelScroll')
+        self.panel_scroll.setWidget(self.panel)
+        self.panel_scroll.setWidgetResizable(True)
+        self.panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.stack.addWidget(self.panel_scroll)
         lay.addLayout(center, 1)
         lay.addWidget(self.stack)
         self.setCentralWidget(root)
@@ -214,7 +224,7 @@ class MainWindow(QMainWindow):
             return
         self.stage = stage
         (self.adjust_btn if stage == 'adjust' else self.inspect_btn).setChecked(True)
-        self.stack.setCurrentWidget(self.panel if stage == 'adjust' else self.inspect)
+        self.stack.setCurrentWidget(self.panel_scroll if stage == 'adjust' else self.inspect)
         self.viewer.set_mode(self.viewer.compare_mode if stage == 'adjust' else 'inspect')
         self._sync_enabled()
         if stage == 'adjust':
@@ -250,6 +260,9 @@ class MainWindow(QMainWindow):
         self.source = src
         self.result = None
         self._smoothed = (None, None)
+        self._toggles = ()
+        self.panel.set_toggle_count(0)
+        self.panel.pick.setChecked(False)
         h, w = src.rgb.shape[:2]
         self.setWindowTitle(f'{Path(path).name} — {APP_NAME}')
         self.info.setText(f'{w} × {h}　{Path(path).suffix[1:].upper()}')
@@ -311,14 +324,28 @@ class MainWindow(QMainWindow):
             self.viewer.set_layer('noise_orig', to_qimage(r['noise']))
             self.panel.set_metrics('before', r['metrics'])
             self.panel.set_ai('before', r['ai'])
-            self.inspect.set_analysis(r['metrics'], r['ai'])
+            self.panel.set_background(r['uniform_bg'])
+            self.inspect.set_analysis(r['metrics'], r['ai'], r['uniform_bg'])
 
     # ---- 処理 ----
+
+    def _params(self):
+        return replace(self.panel.params(), toggles=self._toggles)
+
+    def _on_picked(self, x, y):
+        self._toggles = self._toggles + ((x, y),)
+        self.panel.set_toggle_count(len(self._toggles))
+        self._on_params(False)
+
+    def _clear_toggles(self):
+        self._toggles = ()
+        self.panel.set_toggle_count(0)
+        self._on_params(False)
 
     def _on_params(self, interactive):
         if self.source is None or self.stage != 'adjust':
             return
-        params = self.panel.params()
+        params = self._params()
         if self.result is not None and self.result['params'] == params:
             self._debounce.stop()
             self._awaiting = False
@@ -341,28 +368,34 @@ class MainWindow(QMainWindow):
 
     def _submit_full(self):
         if self.source is not None:
-            self.full.submit((self.source, self.panel.params()))
+            self.full.submit((self.source, self._params()))
 
     def _on_preview(self, r):
         current = self.source is not None and r['source_id'] == self.source.id
-        if current and self._awaiting and r['params'] == self.panel.params():
-            self.viewer.set_patch(r['rect'], to_qimage(r['display']), to_qimage(r['noise']),
-                                  mask_to_qimage(r['mask']))
+        if current and self._awaiting and r['params'] == self._params():
+            view = r['display']
+            last = self.result
+            if r['params'].cutout and last is not None and last['params'].cutout_key == r['params'].cutout_key:
+                # 透過の設定が変わっていなければ、前回の全体処理の透明部分を借りて見た目をそろえる
+                x0, y0, x1, y1 = r['rect']
+                view = composite_on_checker(view, last['alpha'][y0:y1, x0:x1], (x0, y0))
+            self.viewer.set_patch(r['rect'], to_qimage(view), to_qimage(r['noise']), mask_to_qimage(r['mask']))
 
     def _on_full(self, r):
         if self.source is None or r['source_id'] != self.source.id:
             return
         self._smoothed = ((r['source_id'], r['params'].smooth_key), r['smoothed'])
-        if r['params'] != self.panel.params():
+        if r['params'] != self._params():
             return   # 設定が変わった後に届いた古い結果。新しい結果を待つ
         self.result = r
         self._awaiting = False
-        self.viewer.set_layer('result', to_qimage(r['display']))
+        self.viewer.set_layer('result', to_qimage(r['view']))
         self.viewer.set_layer('noise_result', to_qimage(r['noise']))
         self.viewer.set_layer('mask', mask_to_qimage(r['mask']))
         self.viewer.clear_patch()
         self.panel.set_metrics('after', r['metrics'])
         self.panel.set_ai('after', r['ai'])
+        self.panel.show_tolerance(r['tolerance'])
         self._sync_enabled()
 
     def _on_failed(self, trace):
@@ -376,20 +409,21 @@ class MainWindow(QMainWindow):
     # ---- 保存・一括処理・メタデータ ----
 
     def save(self):
-        self._save_as(self.result['result'], BATCH_SUFFIX, '処理後の画像を保存', not self.keep_meta)
+        self._save_as(self.result['result'], BATCH_SUFFIX, '処理後の画像を保存', not self.keep_meta,
+                      self.result['alpha'])
 
     def save_without_meta(self):
         """画素はそのまま、メタデータだけを除いて保存する"""
-        self._save_as(self.source.rgb, NO_META_SUFFIX, 'メタデータを消して保存', True)
+        self._save_as(self.source.rgb, NO_META_SUFFIX, 'メタデータを消して保存', True, self.source.alpha)
 
-    def _save_as(self, rgb, suffix, title, strip_meta):
+    def _save_as(self, rgb, suffix, title, strip_meta, alpha):
         src = Path(self.source.path)
         default = src.with_name(f'{src.stem}{suffix}.png')
         path, _ = QFileDialog.getSaveFileName(self, title, str(default), 'PNG (*.png)')
         if not path:
             return
         try:
-            save_png(rgb, self.source.alpha, self.source.meta, path, strip_meta)
+            save_png(rgb, alpha, self.source.meta, path, strip_meta)
         except Exception as e:
             QMessageBox.warning(self, APP_NAME, f'保存できませんでした。\n{path}\n\n{e}')
             return

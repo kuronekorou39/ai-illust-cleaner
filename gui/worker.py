@@ -8,9 +8,10 @@ import numpy as np
 from PySide6.QtCore import QThread, Signal
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
+from cutout import cutout, is_uniform_background, merge_alpha
 from denoise import blend, line_mask, smooth
 from .detector import detector
-from .imaging import composite_on_white, noise_view
+from .imaging import composite_on_checker, composite_on_white, noise_view
 
 PREVIEW_PAD = 24         # プレビュー領域の外側に足す余白（端の影響を表示範囲に入れないため）
 PREVIEW_MAX_SIDE = 512   # プレビューで処理する領域の一辺の上限
@@ -23,6 +24,14 @@ class Params:
     lam: float
     dark: int
     grad: int
+    cutout: bool = False   # 単色の背景を透明にする
+    tolerance: int | None = None   # None なら自動
+    holes: bool = False    # 囲まれた背景（腕と体の間など）も自動で透明にする
+    toggles: tuple = ()    # クリックで透明にするかどうかを反転させた位置 (x, y)
+
+    @property
+    def cutout_key(self):
+        return (self.cutout, self.tolerance, self.holes, self.toggles)
 
     @property
     def smooth_key(self):
@@ -103,12 +112,19 @@ class FullProcessor:
             self._cache_key = key
         mask = line_mask(src.rgb, params.dark, params.grad)
         result = blend(src.rgb, self._smoothed, mask)
+        # 指標はノイズ除去の効果だけを測りたいので、透過の前の見た目（元の透明部分は白に合成）で計算する
         display = composite_on_white(result, src.alpha)
+        alpha, view, tolerance = src.alpha, display, None
+        if params.cutout:
+            result, cut, tolerance = cutout(result, params.tolerance, params.holes, params.toggles)
+            alpha = merge_alpha(cut, src.alpha)
+            view = composite_on_checker(result, alpha)
         noise, mean, over = noise_view(display)
         a, b = src.display.astype(float), display.astype(float)
         return {
             'source_id': src.id, 'params': params,
-            'result': result, 'display': display, 'noise': noise, 'mask': mask,
+            'result': result, 'alpha': alpha, 'display': display, 'view': view, 'noise': noise, 'mask': mask,
+            'tolerance': tolerance,
             'smoothed': self._smoothed,
             'ai': detector.predict(display),
             'metrics': {
@@ -159,7 +175,7 @@ def analyze_source(src):
     """元画像のノイズマップ・指標・AI判定度（判定モデルが未取得なら ai は None）"""
     noise, mean, over = noise_view(src.display)
     return {'source_id': src.id, 'noise': noise, 'metrics': {'mean': mean, 'over': over},
-            'ai': detector.predict(src.display)}
+            'ai': detector.predict(src.display), 'uniform_bg': is_uniform_background(src.display)}
 
 
 def clamp_preview_rect(rect, center):

@@ -69,6 +69,7 @@ QPushButton { border: 1px solid @BORDER_STRONG; border-radius: 6px; background: 
 QPushButton:hover { border-color: @MUTED; }
 QPushButton:pressed { background: @BORDER; }
 QPushButton:disabled { color: @DISABLED; border-color: @BORDER; }
+QPushButton:checked { border-color: @ACCENT; color: @ACCENT; }
 QPushButton[kind="primary"] { border: none; border-radius: 8px; background: @ACCENT; color: @ON_ACCENT;
     font-weight: 700; min-height: 40px; padding: 0 28px; }
 QPushButton[kind="primary"]:hover { background: #f2b458; }
