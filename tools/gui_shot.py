@@ -1,6 +1,6 @@
 """GUIの見た目を確認するためのスクリーンショットを撮る
 
-使い方: python tools/gui_shot.py [画像.png] [--out 出力フォルダ]
+使い方: python tools/gui_shot.py [画像.png] [--out 出力フォルダ] [--center x,y] [--zoom 倍率]
 空の状態・確認画面・4分割・スライド比較（画像／ノイズ）・線マスク表示を順に保存する
 """
 import argparse, sys
@@ -15,6 +15,8 @@ from gui.window import MainWindow
 ap = argparse.ArgumentParser()
 ap.add_argument('src', nargs='?', default='input/sd_img2img.png')
 ap.add_argument('--out', default='output/gui')
+ap.add_argument('--center', help='拡大表示の中心（画像座標 x,y）。省略時は左上寄り')
+ap.add_argument('--zoom', type=float, default=3.0, help='拡大表示の倍率（1.0 で等倍）')
 a = ap.parse_args()
 
 app = create_app()
@@ -54,8 +56,12 @@ win.set_stage('adjust')
 settle()
 shot('1_quad_fit')
 
-center = QPointF(win.viewer.width() * 0.25, win.viewer.height() * 0.25)
-win.viewer.zoom_by(3.0 / win.viewer.zoom, center)
+if a.center:
+    win.viewer.cx, win.viewer.cy = map(float, a.center.split(','))
+    win.viewer.zoom_by(a.zoom / win.viewer.zoom)
+else:
+    center = QPointF(win.viewer.width() * 0.25, win.viewer.height() * 0.25)
+    win.viewer.zoom_by(a.zoom / win.viewer.zoom, center)
 settle()
 shot('2_quad_zoom')
 
