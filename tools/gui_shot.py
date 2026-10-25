@@ -13,7 +13,7 @@ from gui.__main__ import create_app
 from gui.window import MainWindow
 
 ap = argparse.ArgumentParser()
-ap.add_argument('src', nargs='?', default='samples/sd_img2img.png')
+ap.add_argument('src', nargs='?', default='input/sd_img2img.png')
 ap.add_argument('--out', default='output/gui')
 a = ap.parse_args()
 
