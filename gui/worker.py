@@ -10,7 +10,6 @@ from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
 from cutout import cutout, is_uniform_background, merge_alpha
 from denoise import blend, line_mask, smooth
-from .detector import detector
 from .imaging import composite_on_checker, composite_on_white, noise_view
 
 PREVIEW_PAD = 24         # プレビュー領域の外側に足す余白（端の影響を表示範囲に入れないため）
@@ -126,7 +125,6 @@ class FullProcessor:
             'result': result, 'alpha': alpha, 'display': display, 'view': view, 'noise': noise, 'mask': mask,
             'tolerance': tolerance,
             'smoothed': self._smoothed,
-            'ai': detector.predict(display),
             'metrics': {
                 'mean': mean, 'over': over,
                 'ssim': float(structural_similarity(a, b, channel_axis=2, data_range=255)),
@@ -172,10 +170,10 @@ class PreviewProcessor:
 
 
 def analyze_source(src):
-    """元画像のノイズマップ・指標・AI判定度（判定モデルが未取得なら ai は None）"""
+    """元画像のノイズマップ・指標・背景が単色か"""
     noise, mean, over = noise_view(src.display)
     return {'source_id': src.id, 'noise': noise, 'metrics': {'mean': mean, 'over': over},
-            'ai': detector.predict(src.display), 'uniform_bg': is_uniform_background(src.display)}
+            'uniform_bg': is_uniform_background(src.display)}
 
 
 def clamp_preview_rect(rect, center):

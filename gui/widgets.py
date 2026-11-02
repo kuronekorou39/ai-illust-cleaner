@@ -43,34 +43,6 @@ def help_button(text, name):
     return b
 
 
-class Gauge(QWidget):
-    """0〜100% の横棒"""
-    HEIGHT = 8
-
-    def __init__(self):
-        super().__init__()
-        self._value = None
-        self.setFixedHeight(self.HEIGHT)
-
-    def set_value(self, value):
-        """value が None なら未計測（空の棒）"""
-        self._value = value
-        self.update()
-
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
-        radius = self.HEIGHT / 2
-        p.setBrush(QColor(theme.BG))
-        p.drawRoundedRect(QRectF(0, 0, self.width(), self.HEIGHT), radius, radius)
-        if self._value:
-            p.setBrush(QColor(theme.ACCENT))
-            p.drawRoundedRect(QRectF(0, 0, max(self.HEIGHT, self.width() * self._value / 100), self.HEIGHT),
-                              radius, radius)
-        p.end()
-
-
 class RailButton(QToolButton):
     """左端の列のボタン（アイコンの下に文字）"""
 

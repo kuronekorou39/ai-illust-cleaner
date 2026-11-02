@@ -53,7 +53,6 @@ QLabel[role="mono"] { font-family: '@FONT_MONO'; }
 QLabel[role="monoMuted"] { font-family: '@FONT_MONO'; font-size: 12px; color: @MUTED; }
 QLabel[role="bigValue"] { font-family: '@FONT_MONO'; font-size: 22px; }
 QLabel[role="tileValue"] { font-family: '@FONT_MONO'; font-size: 20px; }
-QLabel[role="score"] { font-family: '@FONT_MONO'; font-size: 40px; color: @ACCENT; }
 QLabel[role="fileName"] { font-size: 15px; font-weight: 700; }
 QLabel[role="metaBox"] { font-family: '@FONT_MONO', '@FONT_UI'; font-size: 11px; color: @MUTED;
     background: @BG; border-radius: 6px; padding: 10px 12px; }

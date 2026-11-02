@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFileDialog, QFrame, QHB
                                QMessageBox, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 
 from denoise import load_image, save_png
-from . import detector, icons, theme
+from . import icons, theme
 from .dialogs import BATCH_SUFFIX, BatchDialog, MetaDialog
 from .imaging import composite_on_checker, mask_to_qimage, to_qimage
 from .inspect import InspectPanel
@@ -18,7 +18,7 @@ from .winchrome import apply_dark_titlebar
 from .worker import (FullProcessor, LatestWorker, PreviewProcessor, Source, analyze_source,
                      clamp_preview_rect)
 
-APP_NAME = 'ai-illust-denoise'
+APP_NAME = 'ai-illust-cleaner'
 NO_META_SUFFIX = '_nometa'   # メタデータだけ消して保存するときの既定のファイル名の末尾
 IMAGE_SUFFIXES = ('.png', '.jpg', '.jpeg', '.jfif', '.jpe', '.webp', '.bmp', '.gif', '.tif', '.tiff')
 OPEN_FILTER = ('画像 (' + ' '.join(f'*{s}' for s in IMAGE_SUFFIXES) + ');;すべてのファイル (*)')
@@ -39,23 +39,6 @@ class Task(QThread):
         self.done.emit(self._fn(self._arg))
 
 
-class ModelDownload(QThread):
-    """判定モデルのダウンロード"""
-    progress = Signal(int, int)
-    finished_ok = Signal(bool)   # 中止された場合は False
-    failed = Signal(str)
-
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.cancelled = False
-
-    def run(self):
-        try:
-            self.finished_ok.emit(detector.download(self.progress.emit, lambda: self.cancelled))
-        except Exception as e:
-            self.failed.emit(str(e))
-
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -71,7 +54,6 @@ class MainWindow(QMainWindow):
         self._awaiting = False      # 現在の設定での全体処理の結果を待っているか
         self._analyzing = 0         # 実行中の指標計算の数
         self._toggles = ()          # 透過をクリックで反転させた位置（画像ごと）
-        self._download = None       # 実行中の判定モデルのダウンロード
         self._smoothed = (None, None)   # (条件, 平滑化結果)。プレビューで使い回す
 
         self.viewer = Viewer()
@@ -95,7 +77,6 @@ class MainWindow(QMainWindow):
 
         self.panel.changed.connect(self._on_params)
         self.panel.maskToggled.connect(self.viewer.set_show_mask)
-        self.inspect.downloadRequested.connect(self.toggle_download)
         self.panel.pick.toggled.connect(self.viewer.set_pick_mode)
         self.panel.pick_clear.clicked.connect(self._clear_toggles)
         self.viewer.picked.connect(self._on_picked)
@@ -272,40 +253,8 @@ class MainWindow(QMainWindow):
         self.inspect.set_source(src)
         for kind in ('before', 'after'):
             self.panel.set_metrics(kind, None)
-            self.panel.set_ai(kind, None)
         self.set_stage('inspect')
         self._run_task(analyze_source, src, self._on_analysis)
-
-    # ---- 判定モデル ----
-
-    def toggle_download(self):
-        if self._download is not None:   # 実行中に押されたら中止
-            self._download.cancelled = True
-            return
-        self._download = ModelDownload(self)
-        self._download.progress.connect(self.inspect.set_download_progress)
-        self._download.finished_ok.connect(self._on_download_done)
-        self._download.failed.connect(self._on_download_failed)
-        self.inspect.set_downloading(True)
-        self._download.start()
-
-    def _end_download(self):
-        self._download.wait()
-        self._download = None
-        self.inspect.set_downloading(False)
-        self.inspect.sync_detector()
-
-    def _on_download_done(self, ok):
-        self._end_download()
-        if ok and self.source is not None:   # 開いている画像をすぐ判定する
-            self.result = None
-            self.inspect.set_analyzing()
-            self._run_task(analyze_source, self.source, self._on_analysis)
-            self._on_params(False)
-
-    def _on_download_failed(self, text):
-        self._end_download()
-        self.inspect.set_download_error(text)
 
     def _run_task(self, fn, arg, on_done):
         task = Task(fn, arg, self)
@@ -323,9 +272,8 @@ class MainWindow(QMainWindow):
         if self.source is not None and r['source_id'] == self.source.id:
             self.viewer.set_layer('noise_orig', to_qimage(r['noise']))
             self.panel.set_metrics('before', r['metrics'])
-            self.panel.set_ai('before', r['ai'])
             self.panel.set_background(r['uniform_bg'])
-            self.inspect.set_analysis(r['metrics'], r['ai'], r['uniform_bg'])
+            self.inspect.set_analysis(r['metrics'], r['uniform_bg'])
 
     # ---- 処理 ----
 
@@ -394,7 +342,6 @@ class MainWindow(QMainWindow):
         self.viewer.set_layer('mask', mask_to_qimage(r['mask']))
         self.viewer.clear_patch()
         self.panel.set_metrics('after', r['metrics'])
-        self.panel.set_ai('after', r['ai'])
         self.panel.show_tolerance(r['tolerance'])
         self._sync_enabled()
 
@@ -459,9 +406,6 @@ class MainWindow(QMainWindow):
             self.open_image(path)
 
     def closeEvent(self, e):
-        if self._download is not None:
-            self._download.cancelled = True
-            self._download.wait()
         self.full.stop()
         self.preview.stop()
         super().closeEvent(e)

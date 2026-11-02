@@ -1,1 +1,1 @@
-"""ai-illust-denoise のGUI"""
+"""ai-illust-cleaner のGUI"""

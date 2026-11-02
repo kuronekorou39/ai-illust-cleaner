@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBo
 
 from cutout import AUTO_MAX
 from denoise import DEFAULT_DARK, DEFAULT_GRAD, DEFAULT_LAM
-from . import score, theme
+from . import theme
 from .widgets import Legend, MetricBars, Segmented, SliderRow, StatTile, button, help_button, label
 from .worker import Params
 
@@ -125,13 +125,6 @@ class Panel(QFrame):
         head.addWidget(label('結果', 'section'))
         head.addStretch(1)
         head.addWidget(Legend([(theme.BAR_BEFORE, '処理前'), (theme.ACCENT, '処理後')]))
-        self.ai_score = label('—', 'tileValue')
-        score_row = QHBoxLayout()
-        score_row.setSpacing(6)
-        score_row.addWidget(label('AI判定度'))
-        score_row.addWidget(help_button(score.HELP, 'AI判定度の説明'))
-        score_row.addStretch(1)
-        score_row.addWidget(self.ai_score)
         self.noise_mean = MetricBars('塗り面ノイズ平均', lambda v: f'{v:.3f}')
         self.noise_over = MetricBars('1階調を超える画素', lambda v: f'{v:.2f}%')
         self.ssim = StatTile('SSIM')
@@ -149,13 +142,12 @@ class Panel(QFrame):
         lay.addWidget(_section(label('線の保護', 'section'), self.dark, self.grad, self.show_mask))
         lay.addWidget(_section(cutout_head, self.cutout, tolerance_row, self.holes, pick_row, self.bg_note,
                                spacing=10))
-        results = _section(head, score_row, self.noise_mean, self.noise_over, tiles, spacing=14)
+        results = _section(head, self.noise_mean, self.noise_over, tiles, spacing=14)
         results.setObjectName('')   # 最後の区切り線は不要
         lay.addWidget(results)
         lay.addStretch(1)
 
         self._metrics = {'before': None, 'after': None}
-        self._ai = {'before': None, 'after': None}
 
     # ---- 値 ----
 
@@ -223,9 +215,3 @@ class Panel(QFrame):
             self.psnr.set_value('—')
         else:
             self.psnr.set_value('変化なし' if after['psnr'] is None else f"{after['psnr']:.1f} dB")
-
-    def set_ai(self, kind, probs):
-        """kind は 'before' / 'after'。probs が None なら未計測（判定モデルが無い場合を含む）"""
-        self._ai[kind] = probs
-        show = lambda p: '—' if p is None else score.percent(score.combine(p))
-        self.ai_score.setText(f"{show(self._ai['before'])} → {show(self._ai['after'])}")

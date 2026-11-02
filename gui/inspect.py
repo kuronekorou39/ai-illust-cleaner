@@ -3,10 +3,10 @@ from pathlib import Path
 
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QProgressBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
 
-from . import detector, score, theme
-from .widgets import Gauge, StatTile, button, help_button, label
+from . import score, theme
+from .widgets import StatTile, button, help_button, label
 
 META_PREVIEW_CHARS = 140
 NOISE_HELP = ('線を除いた塗りの部分にある、細かな色のばらつきです。\n'
@@ -88,7 +88,6 @@ class InspectPanel(QFrame):
     proceedRequested = Signal()
     stripSaveRequested = Signal()
     metaRequested = Signal()
-    downloadRequested = Signal()
 
     def __init__(self):
         super().__init__()
@@ -98,36 +97,6 @@ class InspectPanel(QFrame):
         # 画像
         self.name = label('', 'fileName')
         self.info = label('', 'monoMuted')
-
-        # AI判定度：判定モデルがあるときの表示
-        self.score = label('—', 'score')
-        self.gauge = Gauge()
-        self.model_rows = [ValueRow(m.title) for m in detector.MODELS]
-        self.result_box = QWidget()
-        rl = QVBoxLayout(self.result_box)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.setSpacing(6)
-        rl.addWidget(self.score)
-        rl.addWidget(self.gauge)
-        for row in self.model_rows:
-            rl.addWidget(row)
-
-        # AI判定度：判定モデルが無いときの表示
-        self.setup_text = label(f'判定モデル（約 {detector.TOTAL_MB}MB）をダウンロードすると使えます。'
-                                '判定はこのPCの中で行い、画像を外部に送りません。', 'muted')
-        self.setup_text.setWordWrap(True)
-        self.download_btn = button('判定モデルをダウンロード')
-        self.download_btn.clicked.connect(self.downloadRequested)
-        self.download_bar = QProgressBar()
-        self.download_bar.setTextVisible(False)
-        self.download_bar.hide()
-        self.setup_box = QWidget()
-        sl = QVBoxLayout(self.setup_box)
-        sl.setContentsMargins(0, 0, 0, 0)
-        sl.setSpacing(10)
-        sl.addWidget(self.setup_text)
-        sl.addWidget(self.download_bar)
-        sl.addWidget(self.download_btn)
 
         # メタデータ
         self.meta_state = ValueRow('生成パラメータ')
@@ -159,7 +128,6 @@ class InspectPanel(QFrame):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(_section(self.name, self.info, spacing=4))
-        lay.addWidget(_section(_titled('AI判定度', score.HELP), self.result_box, self.setup_box, spacing=6))
         lay.addWidget(_section(_titled('メタデータ', META_HELP), self.meta_state, self.meta_text,
                                meta_row, self.strip, spacing=8))
         lay.addWidget(_section(_titled('塗り面ノイズ', NOISE_HELP), tiles, self.advice, last=True))
@@ -168,26 +136,6 @@ class InspectPanel(QFrame):
         foot.setContentsMargins(20, 0, 20, 20)
         foot.addWidget(self.proceed)
         lay.addLayout(foot)
-        self.sync_detector()
-
-    # ---- 判定モデルの準備 ----
-
-    def sync_detector(self):
-        installed = detector.is_installed()
-        self.result_box.setVisible(installed)
-        self.setup_box.setVisible(not installed)
-
-    def set_downloading(self, active):
-        self.download_bar.setVisible(active)
-        self.download_bar.setValue(0)
-        self.download_btn.setText('中止' if active else '判定モデルをダウンロード')
-
-    def set_download_progress(self, done, total):
-        self.download_bar.setRange(0, max(1, total >> 10))
-        self.download_bar.setValue(done >> 10)
-
-    def set_download_error(self, text):
-        self.setup_text.setText(f'ダウンロードできませんでした。\n{text}')
 
     # ---- 表示の更新 ----
 
@@ -215,23 +163,12 @@ class InspectPanel(QFrame):
 
     def set_analyzing(self):
         """計測が終わるまでの表示"""
-        self.score.setText('—')
-        self.gauge.set_value(None)
-        for row in self.model_rows:
-            row.set_state('計測中')
         self.noise_mean.set_value('—')
         self.noise_over.set_value('—')
         self.advice.setText('')
 
-    def set_analysis(self, metrics, probs, uniform_bg):
+    def set_analysis(self, metrics, uniform_bg):
         self.info.setText(self.info.text() + ('　背景 単色' if uniform_bg else '　背景 複雑'))
         self.noise_mean.set_value(f"{metrics['mean']:.3f}")
         self.noise_over.set_value(f"{metrics['over']:.2f}%")
         self.advice.setText(_NOISE_TEXT[score.noise_level(metrics['mean'])])
-        if probs is None:
-            return
-        p = score.combine(probs)
-        self.score.setText(score.percent(p))
-        self.gauge.set_value(p * 100)
-        for row, prob in zip(self.model_rows, probs):
-            row.set_state(score.percent(prob), prob >= score.LIKELY_AI)
