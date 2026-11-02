@@ -40,3 +40,35 @@ def noise_score(rgb):
     """(ノイズ平均, 1階調超の画素率%) を返す"""
     _, _, m = fill_noise(rgb)
     return float(m.mean()), float((m > 1).mean() * 100)
+
+
+# ---- 処理前後の近さ（scikit-image の既定と同じ計算。配布物を軽くするため自前で持つ）
+SSIM_WINDOW = 7
+SSIM_K1, SSIM_K2 = 0.01, 0.03
+
+
+def ssim(a, b, data_range=255):
+    """カラー画像の SSIM（チャンネルごとの平均）。7×7の一様な窓、標本共分散で計算する"""
+    from scipy.ndimage import uniform_filter
+    a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
+    n = SSIM_WINDOW ** 2
+    cov_norm = n / (n - 1)
+    c1, c2 = (SSIM_K1 * data_range) ** 2, (SSIM_K2 * data_range) ** 2
+    pad = (SSIM_WINDOW - 1) // 2
+    scores = []
+    for ch in range(a.shape[2]):
+        x, y = a[..., ch], b[..., ch]
+        f = lambda v: uniform_filter(v, size=SSIM_WINDOW)
+        ux, uy = f(x), f(y)
+        vx = cov_norm * (f(x * x) - ux * ux)
+        vy = cov_norm * (f(y * y) - uy * uy)
+        vxy = cov_norm * (f(x * y) - ux * uy)
+        s = ((2 * ux * uy + c1) * (2 * vxy + c2)) / ((ux ** 2 + uy ** 2 + c1) * (vx + vy + c2))
+        scores.append(s[pad:-pad, pad:-pad].mean())   # 窓が画像からはみ出す縁は除く
+    return float(np.mean(scores))
+
+
+def psnr(a, b, data_range=255):
+    """PSNR（dB）。完全に同じ画像では計算できないので None"""
+    mse = np.mean((np.asarray(a, np.float64) - np.asarray(b, np.float64)) ** 2)
+    return None if mse == 0 else float(10 * np.log10(data_range ** 2 / mse))

@@ -38,27 +38,31 @@ def icon(name, size=18):
     return ic
 
 
+def app_pixmap(size):
+    """アプリのアイコン：半分だけ塗った円（処理前後の比較を表す）。exe 用の .ico もこれから作る"""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.scale(size / 16, size / 16)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(theme.SURFACE))
+    p.drawRoundedRect(QRectF(0, 0, 16, 16), 3.5, 3.5)
+    half = QPainterPath()
+    half.moveTo(8, 3.5)
+    half.arcTo(QRectF(3.5, 3.5, 9, 9), 90, -180)
+    half.closeSubpath()
+    p.setBrush(QColor(theme.ACCENT))
+    p.drawPath(half)
+    p.setBrush(Qt.NoBrush)
+    p.setPen(QPen(QColor(theme.ACCENT), 1.3))
+    p.drawEllipse(QRectF(3.5, 3.5, 9, 9))
+    p.end()
+    return pm
+
+
 def app_icon():
-    """アプリのアイコン：半分だけ塗った円（処理前後の比較を表す）"""
     ic = QIcon()
     for size in (16, 32, 48, 256):
-        pm = QPixmap(size, size)
-        pm.fill(Qt.transparent)
-        p = QPainter(pm)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.scale(size / 16, size / 16)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(theme.SURFACE))
-        p.drawRoundedRect(QRectF(0, 0, 16, 16), 3.5, 3.5)
-        half = QPainterPath()
-        half.moveTo(8, 3.5)
-        half.arcTo(QRectF(3.5, 3.5, 9, 9), 90, -180)
-        half.closeSubpath()
-        p.setBrush(QColor(theme.ACCENT))
-        p.drawPath(half)
-        p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(QColor(theme.ACCENT), 1.3))
-        p.drawEllipse(QRectF(3.5, 3.5, 9, 9))
-        p.end()
-        ic.addPixmap(pm)
+        ic.addPixmap(app_pixmap(size))
     return ic

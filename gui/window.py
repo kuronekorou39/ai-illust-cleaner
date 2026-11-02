@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QMainWindow, QM
 
 import metadata as md
 from denoise import load_image, save_clean, save_png
-from . import icons, theme
+from . import __version__, icons, theme
 from .dialogs import BATCH_SUFFIX, BatchDialog, MetaDialog, SaveDialog
 from .imaging import composite_on_checker, mask_to_qimage, to_qimage
 from .info import InfoPanel
@@ -43,7 +43,7 @@ class Task(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(APP_NAME)
+        self.setWindowTitle(f'{APP_NAME} {__version__}')
         self.setWindowIcon(icons.app_icon())
         self.resize(1440, 900)
         self.setMinimumSize(1180, 720)
@@ -203,7 +203,7 @@ class MainWindow(QMainWindow):
         self.panel.set_toggle_count(0)
         self.panel.pick.setChecked(False)
         h, w = src.rgb.shape[:2]
-        self.setWindowTitle(f'{Path(path).name} — {APP_NAME}')
+        self.setWindowTitle(f'{Path(path).name} — {APP_NAME} {__version__}')
         self.info.setText(f'{w} × {h}　{Path(path).suffix[1:].upper()}')
         self._awaiting = False
         self._debounce.stop()

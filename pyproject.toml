@@ -3,18 +3,25 @@ name = "ai-illust-cleaner"
 version = "0.1.0"
 description = "AI生成イラストのメタデータ確認・消去と、塗り面ノイズの可視化・除去を行うツール"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "rou39" }]
 dependencies = [
     "opencv-contrib-python>=4.8",
     "numpy",
     "pillow",
     "scipy",
-    "matplotlib",
-    "scikit-image",
     "pyside6>=6.11.2",
 ]
 
+[project.urls]
+Homepage = "https://rou39.com"
+Repository = "https://github.com/kuronekorou39/ai-illust-cleaner"
+
 [dependency-groups]
 dev = [
+    "matplotlib>=3.10.9",
+    "pyinstaller>=6.22.3",
     "pytest>=9.2.0",
 ]

@@ -1,0 +1,29 @@
+# v から始まるタグ（例: v0.1.0）を push すると、exe を作って動作を確かめ、GitHub のリリースに zip を載せる
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - run: uv run pytest -q
+      - run: uv run python tools/build_exe.py
+      - name: exe の動作確認（画面を出さずに画像を開いて処理する）
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/ai-illust-cleaner/ai-illust-cleaner.exe -ArgumentList '--smoke-test', 'docs/sample.png', 'smoke.png' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content smoke.log; exit 1 }
+      - name: リリースを作る
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME (Get-Item dist/*.zip) --title $env:GITHUB_REF_NAME --generate-notes

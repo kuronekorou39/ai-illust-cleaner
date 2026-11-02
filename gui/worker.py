@@ -6,8 +6,8 @@ from itertools import count
 
 import numpy as np
 from PySide6.QtCore import QThread, Signal
-from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
+from common import psnr, ssim
 from cutout import cutout, is_uniform_background, merge_alpha
 from denoise import blend, line_mask, smooth
 import noise
@@ -129,9 +129,8 @@ class FullProcessor:
             'smoothed': self._smoothed,
             'metrics': {
                 'mean': mean, 'over': over,
-                'ssim': float(structural_similarity(a, b, channel_axis=2, data_range=255)),
-                # 処理で1画素も変わらなかった場合、PSNR は計算できない（0で割ることになる）
-                'psnr': None if np.array_equal(a, b) else float(peak_signal_noise_ratio(a, b, data_range=255)),
+                'ssim': ssim(a, b),
+                'psnr': psnr(a, b),   # 1画素も変わらなかった場合は None
             },
         }
 

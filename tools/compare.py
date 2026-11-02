@@ -10,8 +10,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from skimage.metrics import structural_similarity as ssim, peak_signal_noise_ratio as psnr
-from common import JP_FONTS, load_rgb_on_white, fill_noise
+from common import JP_FONTS, load_rgb_on_white, fill_noise, psnr, ssim
 
 plt.rcParams['font.family'] = JP_FONTS
 
@@ -31,7 +30,8 @@ for j, (p, kind) in enumerate(items):
     res, _, m = fill_noise(rgb)
     t = f'{Path(p).name}\nノイズ平均 {m.mean():.3f} / 1階調超 {100*(m>1).mean():.2f}%'
     if kind == 'result' and rgb.shape == orig.shape:
-        t += f'\nPSNR {psnr(orig, rgb, data_range=255):.1f}dB / SSIM {ssim(orig, rgb, channel_axis=2, data_range=255):.3f}'
+        db = psnr(orig, rgb)
+        t += f'\nPSNR {"変化なし" if db is None else f"{db:.1f}dB"} / SSIM {ssim(orig, rgb):.3f}'
     ax[0, j].imshow(rgb[y0:y0+s, x0:x0+s].astype(np.uint8), interpolation='nearest'); ax[0, j].set_title(t, fontsize=10)
     ax[1, j].imshow(np.clip(128 + res[y0:y0+s, x0:x0+s] * 60, 0, 255).astype(np.uint8), interpolation='nearest')
     ax[1, j].set_title('色ノイズ ×60')
