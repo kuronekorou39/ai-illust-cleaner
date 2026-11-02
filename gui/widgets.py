@@ -23,6 +23,23 @@ def button(text, kind=None, checkable=False):
     return b
 
 
+class ClickableLabel(QLabel):
+    """クリックできる文字の枠。マウスを乗せると枠が強調される（スタイルは :hover で指定）"""
+    clicked = Signal()
+
+    def __init__(self, role, tooltip):
+        super().__init__()
+        self.setProperty('role', role)
+        self.setAttribute(Qt.WA_Hover)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(tooltip)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton and self.rect().contains(e.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(e)
+
+
 def icon_button(name, tooltip):
     b = button('', 'icon')
     b.setIcon(icons.icon(name, 16))

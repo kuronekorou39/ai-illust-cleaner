@@ -43,21 +43,21 @@ QToolTip { background: @SURFACE; color: @TEXT; border: 1px solid @BORDER_STRONG;
 #panel { background: @PANEL; border-left: 1px solid @BORDER; }
 #panel[side="left"] { border-left: none; border-right: 1px solid @BORDER; }
 #section { border-bottom: 1px solid @BORDER; }
-#group { background: @BG; border-bottom: 1px solid @BORDER; }
 #panelScroll { background: @PANEL; border: none; }
 
 QLabel { background: transparent; }
 QLabel[role="section"] { font-size: 12px; font-weight: 700; color: @MUTED; letter-spacing: 1px; }
 QLabel[role="muted"] { color: @MUTED; }
 QLabel[role="small"] { color: @MUTED; font-size: 11px; }
-QLabel[role="groupTitle"] { font-size: 12px; font-weight: 700; color: @TEXT; }
+QLabel[role="groupTitle"] { font-size: 15px; font-weight: 700; color: @TEXT; }
 QLabel[role="mono"] { font-family: '@FONT_MONO'; }
 QLabel[role="monoMuted"] { font-family: '@FONT_MONO'; font-size: 12px; color: @MUTED; }
 QLabel[role="bigValue"] { font-family: '@FONT_MONO'; font-size: 22px; }
 QLabel[role="tileValue"] { font-family: '@FONT_MONO'; font-size: 20px; }
 QLabel[role="fileName"] { font-size: 15px; font-weight: 700; }
 QLabel[role="metaBox"] { font-family: '@FONT_MONO', '@FONT_UI'; font-size: 11px; color: @MUTED;
-    background: @BG; border-radius: 6px; padding: 10px 12px; }
+    background: @BG; border: 1px solid transparent; border-radius: 6px; padding: 10px 12px; }
+QLabel[role="metaBox"]:hover { color: @TEXT; border-color: @ACCENT; }
 QLabel:disabled { color: @DISABLED; }
 
 

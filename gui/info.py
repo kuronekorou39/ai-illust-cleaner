@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
 
 import metadata as md
 from . import icons, score, theme
-from .widgets import Legend, MetricBars, StatTile, button, help_button, label
+from .widgets import ClickableLabel, Legend, MetricBars, StatTile, button, help_button, label
 
 META_PREVIEW_CHARS = 140
 META_SUMMARY_KEYS = ('シード値', 'モデル')   # 左パネルに出す生成設定
@@ -119,14 +119,10 @@ class InfoPanel(QFrame):
         self.meta_rows = {g: ValueRow(name) for g, (name, _) in md.GROUPS.items()}
         self.notes = label('', 'small')
         self.notes.setWordWrap(True)
-        self.meta_text = label('', 'metaBox')
+        self.meta_text = ClickableLabel('metaBox', 'クリックで内容をすべて表示')
         self.meta_text.setWordWrap(True)
         self.meta_text.setTextFormat(Qt.PlainText)
-        self.meta_view = button('内容をすべて見る', 'link')
-        self.meta_view.clicked.connect(self.metaRequested)
-        meta_row = QHBoxLayout()
-        meta_row.addWidget(self.meta_view)
-        meta_row.addStretch(1)
+        self.meta_text.clicked.connect(self.metaRequested)
 
         # 結果（塗り面ノイズの処理前後と、元の絵の保たれ具合）
         self.noise_mean = MetricBars('塗り面ノイズ平均', lambda v: f'{v:.3f}')
@@ -142,7 +138,7 @@ class InfoPanel(QFrame):
         legend = Legend([(theme.BAR_BEFORE, '処理前'), (theme.ACCENT, '処理後')])
 
         self.meta_box = _section(_titled('メタデータ', META_HELP), *self.meta_rows.values(), self.notes,
-                                 self.meta_text, meta_row, spacing=4)
+                                 self.meta_text, spacing=4)
         self.result_box = _section(_titled('塗り面ノイズ', NOISE_HELP, legend), self.noise_mean,
                                    self.noise_over, self.advice, tiles, spacing=12, last=True)
         lay = QVBoxLayout(self)
@@ -202,7 +198,6 @@ class InfoPanel(QFrame):
             summary = f'{e.key}: {value[:META_PREVIEW_CHARS]}' + ('…' if len(value) > META_PREVIEW_CHARS else '')
         self.meta_text.setText(summary)
         self.meta_text.setVisible(bool(summary))
-        self.meta_view.setVisible(bool(groups))
 
     def set_analysis(self, metrics, uniform_bg):
         """元画像の計測結果"""

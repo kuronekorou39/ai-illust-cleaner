@@ -64,15 +64,14 @@ def _titled(text, help_text):
 
 def _group(title, note):
     """「処理」「表示」のまとまりの見出し"""
-    box = QFrame()
-    box.setObjectName('group')
+    box = QWidget()
     lay = QHBoxLayout(box)
-    lay.setContentsMargins(20, 8, 20, 8)
+    lay.setContentsMargins(20, 20, 20, 0)
     lay.setSpacing(10)
-    lay.addWidget(label(title, 'groupTitle'))
+    lay.addWidget(label(title, 'groupTitle'), 0, Qt.AlignBottom)
     sub = label(note, 'small')
     sub.setWordWrap(True)   # パネルの幅を押し広げないようにする
-    lay.addWidget(sub, 1)
+    lay.addWidget(sub, 1, Qt.AlignBottom)
     return box
 
 
