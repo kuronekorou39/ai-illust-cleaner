@@ -1,11 +1,11 @@
-"""右側の調整パネル"""
+"""右側の調整パネル（ノイズ除去・ノイズの見え方・背景の透過）"""
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
+import noise
 from cutout import AUTO_MAX
 from denoise import DEFAULT_DARK, DEFAULT_GRAD, DEFAULT_LAM
-from . import theme
-from .widgets import Legend, MetricBars, Segmented, SliderRow, StatTile, button, help_button, label
+from .widgets import ChoiceGrid, Segmented, SliderRow, button, help_button, label
 from .worker import Params
 
 LAM_STEP = 0.0002            # 強さスライダーの1目盛り
@@ -14,6 +14,12 @@ LAM_PRESETS = (('弱', 0.001), ('標準', 0.002), ('強', 0.005))
 DARK_MAX = 255
 GRAD_MAX = 400
 TOLERANCE_MAX = 64
+NOISE_HELP = ('ノイズの見え方を切り替えます。ノイズ除去の結果や数値には影響しません。\n'
+              '数値は比べられるよう、常にメディアン差で計算しています。\n\n'
+              '抽出：画像から何を引いてノイズとみなすか\n'
+              + '\n'.join(f'・{name}：{desc.splitlines()[0]}' for name, desc in noise.ALGOS.values())
+              + '\n\n表示：取り出したノイズをどう見せるか\n'
+              + '\n'.join(f'・{name}：{desc.splitlines()[0]}' for name, desc in noise.STYLES.values()))
 CUTOUT_HELP = ('画像の縁の色を背景色とみなし、縁とつながっている同じ色の部分を透明にします。\n'
                '腕と体の間など、囲まれた背景は「クリックで透明を切り替え」を押してから\n'
                'その場所をクリックすると透明になります。もう一度クリックすると戻ります。\n'
@@ -44,6 +50,8 @@ def _section(*widgets, spacing=12):
 class Panel(QFrame):
     changed = Signal(bool)          # 引数は「操作の途中か」（スライダーをつかんでいる間は True）
     maskToggled = Signal(bool)
+    noiseChanged = Signal(str, str)  # ノイズの (抽出方式, 表示方式)
+    compareAlgos = Signal(bool)      # 抽出方式を4通り並べて比べる表示のオン・オフ
 
     def __init__(self):
         super().__init__()
@@ -83,6 +91,21 @@ class Panel(QFrame):
         self.show_mask.setCursor(Qt.PointingHandCursor)
         self.show_mask.toggled.connect(self.maskToggled)
 
+        # ノイズの見え方
+        noise_head = QHBoxLayout()
+        noise_head.setSpacing(6)
+        noise_head.addWidget(label('ノイズの見え方', 'section'))
+        noise_head.addWidget(help_button(NOISE_HELP, 'ノイズの見え方の説明'))
+        noise_head.addStretch(1)
+        self.algo = ChoiceGrid([(k, name, desc) for k, (name, desc) in noise.ALGOS.items()], 2)
+        self.compare = button('4通りを並べて選ぶ', checkable=True)
+        self.compare.setToolTip('画面を4分割し、それぞれの抽出方式で取り出したノイズを並べます。\n'
+                                '画面をクリックすると、その方式に決まります。')
+        self.compare.toggled.connect(self.compareAlgos)
+        self.noise_style = ChoiceGrid([(k, name, desc) for k, (name, desc) in noise.STYLES.items()], 3)
+        for grid in (self.algo, self.noise_style):
+            grid.changed.connect(lambda _: self.noiseChanged.emit(*self.noise_key()))
+
         # 背景の透過
         cutout_head = QHBoxLayout()
         cutout_head.setSpacing(6)
@@ -116,23 +139,15 @@ class Panel(QFrame):
         tolerance_row.addWidget(self.auto_tolerance, 0, Qt.AlignBottom)
         self.tolerance.changed.connect(lambda _: self.changed.emit(self.tolerance.slider.isSliderDown()))
         self.tolerance.released.connect(lambda: self.changed.emit(False))
-        self.bg_note = label('', 'small')
-        self.bg_note.setWordWrap(True)
+        # 透過の設定は、透過をオンにしたときだけ出す
+        self.cutout_opts = QWidget()
+        opts = QVBoxLayout(self.cutout_opts)
+        opts.setContentsMargins(0, 4, 0, 0)
+        opts.setSpacing(10)
+        opts.addLayout(tolerance_row)
+        opts.addWidget(self.holes)
+        opts.addLayout(pick_row)
         self._sync_cutout(False)
-
-        # 結果
-        head = QHBoxLayout()
-        head.addWidget(label('結果', 'section'))
-        head.addStretch(1)
-        head.addWidget(Legend([(theme.BAR_BEFORE, '処理前'), (theme.ACCENT, '処理後')]))
-        self.noise_mean = MetricBars('塗り面ノイズ平均', lambda v: f'{v:.3f}')
-        self.noise_over = MetricBars('1階調を超える画素', lambda v: f'{v:.2f}%')
-        self.ssim = StatTile('SSIM')
-        self.psnr = StatTile('PSNR')
-        tiles = QHBoxLayout()
-        tiles.setSpacing(8)
-        tiles.addWidget(self.ssim)
-        tiles.addWidget(self.psnr)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -140,14 +155,12 @@ class Panel(QFrame):
         lay.addWidget(_section(self.lam, presets))
         lay.addWidget(_section(mode_box))
         lay.addWidget(_section(label('線の保護', 'section'), self.dark, self.grad, self.show_mask))
-        lay.addWidget(_section(cutout_head, self.cutout, tolerance_row, self.holes, pick_row, self.bg_note,
-                               spacing=10))
-        results = _section(head, self.noise_mean, self.noise_over, tiles, spacing=14)
-        results.setObjectName('')   # 最後の区切り線は不要
-        lay.addWidget(results)
+        lay.addWidget(_section(noise_head, label('抽出', 'small'), self.algo, self.compare,
+                               label('表示', 'small'), self.noise_style, spacing=8))
+        cut = _section(cutout_head, self.cutout, self.cutout_opts, spacing=10)
+        cut.setObjectName('')   # 最後の区切り線は不要
+        lay.addWidget(cut)
         lay.addStretch(1)
-
-        self._metrics = {'before': None, 'after': None}
 
     # ---- 値 ----
 
@@ -158,14 +171,21 @@ class Panel(QFrame):
                       None if self.auto_tolerance.isChecked() else self.tolerance.value(),
                       self.holes.isChecked())
 
+    def noise_key(self):
+        return self.algo.value(), self.noise_style.value()
+
+    def set_algo(self, key):
+        """4通りの比較で選ばれた抽出方式にする"""
+        if key != self.algo.value():
+            self.algo.set_value(key)
+            self.noiseChanged.emit(*self.noise_key())
+
     def _sync_cutout(self, _=None):
         on = self.cutout.isChecked()
-        self.auto_tolerance.setEnabled(on)
-        self.holes.setEnabled(on)
-        self.pick.setEnabled(on)
+        self.cutout_opts.setVisible(on)
         if not on:
             self.pick.setChecked(False)
-        self.tolerance.setEnabled(on and not self.auto_tolerance.isChecked())
+        self.tolerance.setEnabled(not self.auto_tolerance.isChecked())
 
     def set_toggle_count(self, n):
         self.pick_clear.setVisible(n > 0)
@@ -178,10 +198,6 @@ class Panel(QFrame):
             self.tolerance.set_value(value)
             self.tolerance.value_label.setText(f'自動 {value}')
             self.tolerance.slider.blockSignals(False)
-
-    def set_background(self, uniform):
-        """背景が単色かどうかで、透過の案内を変える"""
-        self.bg_note.setText('' if uniform else '縁の色がそろっていないため、きれいに抜けない可能性があります。')
 
     def _on_lam(self, _):
         self._sync_presets()
@@ -200,18 +216,3 @@ class Panel(QFrame):
         for b in self._presets.buttons():
             b.setEnabled(mode == 'l0')
         self.changed.emit(False)
-
-    # ---- 結果の表示 ----
-
-    def set_metrics(self, kind, metrics):
-        """kind は 'before' / 'after'。metrics が None なら未計測に戻す"""
-        self._metrics[kind] = metrics
-        get = lambda k, name: None if self._metrics[k] is None else self._metrics[k][name]
-        self.noise_mean.set_values(get('before', 'mean'), get('after', 'mean'))
-        self.noise_over.set_values(get('before', 'over'), get('after', 'over'))
-        after = self._metrics['after']
-        self.ssim.set_value('—' if after is None else f"{after['ssim']:.3f}")
-        if after is None:
-            self.psnr.set_value('—')
-        else:
-            self.psnr.set_value('変化なし' if after['psnr'] is None else f"{after['psnr']:.1f} dB")

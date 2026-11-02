@@ -201,3 +201,10 @@ def clamp_preview_rect(rect, center):
         c = int(min(max(cy, y0 + half), y1 - half))
         y0, y1 = c - half, c + half
     return x0, y0, x1, y1
+
+
+def render_algos(job):
+    """抽出方式を4通り並べて比べるための、元画像のノイズマップ"""
+    src, style = job
+    return {'source_id': src.id, 'style': style,
+            'layers': {k: noise_image(src.display, (k, style)) for k in noise.ALGOS}}

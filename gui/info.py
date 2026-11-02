@@ -1,4 +1,4 @@
-"""読み込んだ画像の状態を確認するパネル（処理の前段階）"""
+"""左側のパネル（ファイル・メタデータ・結果の数値）"""
 from pathlib import Path
 
 from PySide6.QtCore import QRectF, Qt, Signal
@@ -6,15 +6,16 @@ from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
 
 import metadata as md
-from . import score, theme
-from .widgets import StatTile, button, help_button, label
+from . import icons, score, theme
+from .widgets import Legend, MetricBars, StatTile, button, help_button, label
 
 META_PREVIEW_CHARS = 140
-META_SUMMARY_KEYS = ('シード値', 'モデル')   # 確認画面に出す生成設定
+META_SUMMARY_KEYS = ('シード値', 'モデル')   # 左パネルに出す生成設定
 NOISE_HELP = ('線を除いた塗りの部分にある、細かな色のばらつきです。\n'
               '「ノイズ平均」はばらつきの平均の大きさ、\n'
               '「1階調を超える画素」は目立つばらつきがある画素の割合で、\n'
-              'どちらも小さいほどきれいです。')
+              'どちらも小さいほどきれいです。\n\n'
+              'SSIM と PSNR は処理前との近さで、大きいほど元の絵が保たれています。')
 META_HELP = ('画像ファイルに埋め込まれた、画素以外の情報です。\n\n'
              + '\n'.join(f'・{name}：{desc}' for name, desc in md.GROUPS.values())
              + '\n\n公開前に、意図しない情報が残っていないか確かめてください。')
@@ -77,29 +78,43 @@ def _section(*items, spacing=10, last=False):
     return box
 
 
-def _titled(text, help_text):
+def _titled(text, help_text, right=None):
     """見出しと「？」ボタンを並べる"""
     row = QHBoxLayout()
     row.setSpacing(6)
     row.addWidget(label(text, 'section'))
     row.addWidget(help_button(help_text, f'{text}の説明'))
     row.addStretch(1)
+    if right is not None:
+        row.addWidget(right)
     return row
 
 
-class InspectPanel(QFrame):
-    proceedRequested = Signal()
+class InfoPanel(QFrame):
+    openRequested = Signal()
+    batchRequested = Signal()
     stripSaveRequested = Signal()
     metaRequested = Signal()
 
     def __init__(self):
         super().__init__()
         self.setObjectName('panel')
-        self.setFixedWidth(theme.PANEL_WIDTH)
+        self.setProperty('side', 'left')
 
-        # 画像
+        # ファイル
+        self.open_btn = button('開く')
+        self.batch_btn = button('フォルダを一括処理')
+        for b, icon_name in ((self.open_btn, 'open'), (self.batch_btn, 'batch')):
+            b.setIcon(icons.icon(icon_name, 16))
+        self.open_btn.clicked.connect(self.openRequested)
+        self.batch_btn.clicked.connect(self.batchRequested)
+        files = QHBoxLayout()
+        files.setSpacing(8)
+        files.addWidget(self.open_btn, 1)
+        files.addWidget(self.batch_btn, 2)
         self.name = label('', 'fileName')
         self.info = label('', 'monoMuted')
+        self.info.setWordWrap(True)
 
         # メタデータ
         self.meta_rows = {g: ValueRow(name) for g, (name, _) in md.GROUPS.items()}
@@ -116,45 +131,53 @@ class InspectPanel(QFrame):
         meta_row.addWidget(self.meta_view)
         meta_row.addStretch(1)
 
-        # 塗り面ノイズ
-        self.noise_mean = StatTile('ノイズ平均')
-        self.noise_over = StatTile('1階調を超える画素')
-        tiles = QHBoxLayout()
-        tiles.setSpacing(8)
-        tiles.addWidget(self.noise_mean)
-        tiles.addWidget(self.noise_over)
+        # 結果（塗り面ノイズの処理前後と、元の絵の保たれ具合）
+        self.noise_mean = MetricBars('塗り面ノイズ平均', lambda v: f'{v:.3f}')
+        self.noise_over = MetricBars('1階調を超える画素', lambda v: f'{v:.2f}%')
         self.advice = label('', 'muted')
         self.advice.setWordWrap(True)
+        self.ssim = StatTile('SSIM')
+        self.psnr = StatTile('PSNR')
+        tiles = QHBoxLayout()
+        tiles.setSpacing(8)
+        tiles.addWidget(self.ssim)
+        tiles.addWidget(self.psnr)
+        legend = Legend([(theme.BAR_BEFORE, '処理前'), (theme.ACCENT, '処理後')])
 
-        self.proceed = button('ノイズ除去に進む', 'primary')
-        self.proceed.clicked.connect(self.proceedRequested)
-
+        self.meta_box = _section(_titled('メタデータ', META_HELP), *self.meta_rows.values(), self.notes,
+                                 self.meta_text, meta_row, self.strip, spacing=4)
+        self.result_box = _section(_titled('塗り面ノイズ', NOISE_HELP, legend), self.noise_mean,
+                                   self.noise_over, self.advice, tiles, spacing=12, last=True)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(_section(self.name, self.info, spacing=4))
-        lay.addWidget(_section(_titled('メタデータ', META_HELP), *self.meta_rows.values(), self.notes,
-                               self.meta_text, meta_row, self.strip, spacing=4))
-        lay.addWidget(_section(_titled('塗り面ノイズ', NOISE_HELP), tiles, self.advice, last=True))
+        lay.addWidget(_section(files, self.name, self.info, spacing=6))
+        lay.addWidget(self.meta_box)
+        lay.addWidget(self.result_box)
         lay.addStretch(1)
-        foot = QVBoxLayout()
-        foot.setContentsMargins(20, 0, 20, 20)
-        foot.addWidget(self.proceed)
-        lay.addLayout(foot)
+
+        self._metrics = {'before': None, 'after': None}
+        self._sync_loaded(False)
+
+    def _sync_loaded(self, loaded):
+        for w in (self.name, self.info, self.meta_box, self.result_box):
+            w.setVisible(loaded)
 
     # ---- 表示の更新 ----
 
     def set_source(self, src):
         path = Path(src.path)
         h, w = src.rgb.shape[:2]
-        width = theme.PANEL_WIDTH - 40
+        width = theme.LEFT_PANEL_WIDTH - 40
         self.name.setText(QFontMetrics(self.name.font()).elidedText(path.name, Qt.ElideMiddle, width))
         self.name.setToolTip(str(path))
         alpha = '透過あり' if src.alpha is not None else '透過なし'
         self.info.setText(f'{w} × {h}　{path.suffix[1:].upper()}　{alpha}')
-
         self._show_meta(src.metadata)
-        self.set_analyzing()
+        for kind in ('before', 'after'):
+            self.set_metrics(kind, None)
+        self.advice.setText('')
+        self._sync_loaded(True)
 
     def _show_meta(self, meta):
         groups = meta.groups()
@@ -185,14 +208,21 @@ class InspectPanel(QFrame):
         self.meta_view.setVisible(bool(groups))
         self.strip.setVisible(bool(groups))
 
-    def set_analyzing(self):
-        """計測が終わるまでの表示"""
-        self.noise_mean.set_value('—')
-        self.noise_over.set_value('—')
-        self.advice.setText('')
-
     def set_analysis(self, metrics, uniform_bg):
+        """元画像の計測結果"""
         self.info.setText(self.info.text() + ('　背景 単色' if uniform_bg else '　背景 複雑'))
-        self.noise_mean.set_value(f"{metrics['mean']:.3f}")
-        self.noise_over.set_value(f"{metrics['over']:.2f}%")
         self.advice.setText(_NOISE_TEXT[score.noise_level(metrics['mean'])])
+        self.set_metrics('before', metrics)
+
+    def set_metrics(self, kind, metrics):
+        """kind は 'before' / 'after'。metrics が None なら未計測に戻す"""
+        self._metrics[kind] = metrics
+        get = lambda k, name: None if self._metrics[k] is None else self._metrics[k][name]
+        self.noise_mean.set_values(get('before', 'mean'), get('after', 'mean'))
+        self.noise_over.set_values(get('before', 'over'), get('after', 'over'))
+        after = self._metrics['after']
+        self.ssim.set_value('—' if after is None else f"{after['ssim']:.3f}")
+        if after is None:
+            self.psnr.set_value('—')
+        else:
+            self.psnr.set_value('変化なし' if after['psnr'] is None else f"{after['psnr']:.1f} dB")

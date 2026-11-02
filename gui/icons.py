@@ -9,8 +9,6 @@ _SVG = {
     'open': '<path d="M2 5h5l1.5 2H16v8H2z"/>',
     'compare': '<rect x="2" y="3" width="14" height="12"/><path d="M9 1v16"/>',
     'batch': '<rect x="2" y="2" width="10" height="10"/><path d="M6 16h10V6"/>',
-    'inspect': '<circle cx="8" cy="8" r="5"/><path d="M12 12l4 4"/>',
-    'adjust': '<path d="M2 5h5M11 5h5M2 13h2M8 13h8"/><circle cx="9" cy="5" r="2"/><circle cx="6" cy="13" r="2"/>',
     'minus': '<path d="M4 9h10"/>',
     'plus': '<path d="M4 9h10M9 4v10"/>',
     'image': '<rect x="2" y="3" width="14" height="12"/><path d="M2 12l4-4 3 3 3-2 4 3"/>',

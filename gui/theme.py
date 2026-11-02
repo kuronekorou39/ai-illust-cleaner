@@ -23,8 +23,8 @@ FONT_UI = 'Zen Kaku Gothic New'
 FONT_MONO = 'DM Mono'
 FONT_UI_FALLBACK = 'Yu Gothic UI'
 
-RAIL_WIDTH = 64
-PANEL_WIDTH = 340
+LEFT_PANEL_WIDTH = 300   # ファイル・メタデータ・結果
+PANEL_WIDTH = 320        # 調整
 BOTTOM_BAR_HEIGHT = 56
 
 
@@ -39,9 +39,9 @@ _QSS = """
 QMainWindow, QDialog { background: @BG; }
 QToolTip { background: @SURFACE; color: @TEXT; border: 1px solid @BORDER_STRONG; padding: 4px 8px; }
 
-#rail { background: @SURFACE; border-right: 1px solid @BORDER; }
 #bottomBar { background: @SURFACE; border-top: 1px solid @BORDER; }
 #panel { background: @PANEL; border-left: 1px solid @BORDER; }
+#panel[side="left"] { border-left: none; border-right: 1px solid @BORDER; }
 #section { border-bottom: 1px solid @BORDER; }
 #panelScroll { background: @PANEL; border: none; }
 
@@ -58,10 +58,6 @@ QLabel[role="metaBox"] { font-family: '@FONT_MONO', '@FONT_UI'; font-size: 11px;
     background: @BG; border-radius: 6px; padding: 10px 12px; }
 QLabel:disabled { color: @DISABLED; }
 
-QToolButton[kind="rail"] { border: none; border-radius: 8px; background: transparent;
-    color: @MUTED; font-size: 11px; padding-top: 6px; }
-QToolButton[kind="rail"]:hover { background: #211f1d; color: @TEXT; }
-QToolButton[kind="rail"]:checked { background: @BORDER; color: @TEXT; }
 
 QPushButton { border: 1px solid @BORDER_STRONG; border-radius: 6px; background: transparent;
     padding: 0 12px; min-height: 32px; }
@@ -78,6 +74,7 @@ QPushButton[kind="secondary"] { border-radius: 8px; min-height: 40px; padding: 0
 QPushButton[kind="icon"] { padding: 0; min-width: 32px; max-width: 32px; }
 QPushButton[kind="preset"] { font-size: 12px; color: @MUTED; min-height: 34px; padding: 0 4px; }
 QPushButton[kind="preset"]:checked { color: @ACCENT; border-color: @ACCENT; }
+QPushButton[kind="preset"]:checked:disabled { color: @DISABLED; border-color: @BORDER_STRONG; }
 QPushButton[kind="help"] { border: 1px solid @MUTED; border-radius: 9px; color: @MUTED; font-size: 11px;
     font-weight: 700; min-height: 16px; padding: 0; }
 QPushButton[kind="help"]:hover { border-color: @ACCENT; color: @ACCENT; }
@@ -90,16 +87,6 @@ QPushButton[kind="seg"] { border: none; border-radius: 6px; font-size: 12px; col
     min-height: 32px; padding: 0 10px; }
 QPushButton[kind="seg"]:hover { color: @TEXT; }
 QPushButton[kind="seg"]:checked { background: @BORDER_STRONG; color: @TEXT; font-weight: 500; }
-
-QPushButton[kind="drop"] { background: @BG; border: 1px solid @BORDER; border-radius: 8px; font-size: 12px;
-    color: @TEXT; min-height: 38px; padding: 0 14px; }
-QPushButton[kind="drop"]:hover { border-color: @BORDER_STRONG; }
-QPushButton[kind="drop"]::menu-indicator { width: 0; image: none; }
-QMenu { background: @SURFACE; border: 1px solid @BORDER_STRONG; padding: 4px; }
-QMenu::item { padding: 6px 20px 6px 28px; border-radius: 4px; font-size: 12px; }
-QMenu::item:selected { background: @BORDER_STRONG; }
-QMenu::item:checked { color: @ACCENT; }
-QMenu::indicator { width: 0; }
 
 QSlider::groove:horizontal { height: 4px; background: @BORDER_STRONG; border-radius: 2px; }
 QSlider::sub-page:horizontal { background: @ACCENT; border-radius: 2px; }

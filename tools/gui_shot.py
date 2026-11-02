@@ -1,7 +1,8 @@
 """GUIの見た目を確認するためのスクリーンショットを撮る
 
 使い方: python tools/gui_shot.py [画像.png] [--out 出力フォルダ] [--center x,y] [--zoom 倍率]
-空の状態・確認画面・4分割・スライド比較（画像／ノイズ）・線マスク表示・ノイズの表示方式の切り替えを順に保存する
+空の状態・4分割・スライド比較（画像／ノイズ）・線マスク表示・ノイズの表示方式の切り替え・
+抽出方式の4通り比較を順に保存する
 """
 import argparse, sys
 from pathlib import Path
@@ -40,6 +41,13 @@ def settle():
     wait(300)
 
 
+def set_noise(algo, style):
+    """右パネルでノイズの見え方を選んだときと同じ流れにする"""
+    win.panel.algo.set_value(algo)
+    win.panel.noise_style.set_value(style)
+    win.panel.noiseChanged.emit(algo, style)
+
+
 def shot(name):
     app.processEvents()
     win.grab().save(str(out / f'{name}.png'))
@@ -49,10 +57,6 @@ def shot(name):
 wait(300)
 shot('0_empty')
 win.open_image(a.src)
-settle()
-shot('1_inspect')
-
-win.set_stage('adjust')
 settle()
 shot('1_quad_fit')
 
@@ -76,11 +80,19 @@ shot('5_slide_mask')
 win.panel.show_mask.setChecked(False)
 
 win.viewer.set_mode('quad')
-win.viewer.set_noise_key('bilateral', 'chroma')
+set_noise('bilateral', 'chroma')
 settle()
 shot('6_quad_chroma')
 win.viewer.fit()
-win.viewer.set_noise_key('median', 'spectrum')
+set_noise('median', 'spectrum')
 settle()
 shot('7_quad_spectrum')
+
+set_noise('median', 'strength')
+win.panel.compare.setChecked(True)
+settle()
+shot('8_algos')
+win.viewer.algoPicked.emit('bilateral')   # 画面のクリックで選んだときと同じ
+settle()
+shot('9_algo_picked')
 win.close()

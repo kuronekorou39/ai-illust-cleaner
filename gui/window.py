@@ -3,21 +3,21 @@ from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFileDialog, QFrame, QHBoxLayout, QMainWindow,
-                               QMessageBox, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QHBoxLayout, QMainWindow, QMessageBox,
+                               QScrollArea, QVBoxLayout, QWidget)
 
 import metadata as md
 from denoise import load_image, save_png
 from . import icons, theme
 from .dialogs import BATCH_SUFFIX, BatchDialog, MetaDialog, StripDialog
 from .imaging import composite_on_checker, mask_to_qimage, to_qimage
-from .inspect import InspectPanel
+from .info import InfoPanel
 from .panel import Panel
 from .viewer import Viewer
-from .widgets import RailButton, button, icon_button, label
+from .widgets import button, icon_button, label
 from .winchrome import apply_dark_titlebar
 from .worker import (FullProcessor, LatestWorker, PreviewProcessor, Source, analyze_source,
-                     clamp_preview_rect, render_noise)
+                     clamp_preview_rect, render_algos, render_noise)
 
 APP_NAME = 'ai-illust-cleaner'
 NO_META_SUFFIX = '_nometa'   # メタデータだけ消して保存するときの既定のファイル名の末尾
@@ -46,19 +46,19 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(icons.app_icon())
         self.resize(1440, 900)
-        self.setMinimumSize(1080, 720)
+        self.setMinimumSize(1180, 720)
         self.setAcceptDrops(True)
 
         self.source = None
         self.result = None          # 最後に表示した全体処理の結果
-        self.stage = 'inspect'      # 'inspect'（状態の確認）→ 'adjust'（ノイズ除去の調整）
+        self._algos_key = None      # 4通りの比較で表示中のノイズの (画像, 表示方式)
         self._awaiting = False      # 現在の設定での全体処理の結果を待っているか
         self._analyzing = 0         # 実行中の指標計算の数
         self._toggles = ()          # 透過をクリックで反転させた位置（画像ごと）
         self._smoothed = (None, None)   # (条件, 平滑化結果)。プレビューで使い回す
 
         self.viewer = Viewer()
-        self.inspect = InspectPanel()
+        self.info_panel = InfoPanel()
         self.panel = Panel()
         self._build()
 
@@ -81,10 +81,13 @@ class MainWindow(QMainWindow):
         self.panel.pick.toggled.connect(self.viewer.set_pick_mode)
         self.panel.pick_clear.clicked.connect(self._clear_toggles)
         self.viewer.picked.connect(self._on_picked)
-        self.viewer.noiseChanged.connect(self._on_noise_changed)
-        self.inspect.metaRequested.connect(self.open_meta)
-        self.inspect.stripSaveRequested.connect(self.save_without_meta)
-        self.inspect.proceedRequested.connect(lambda: self.set_stage('adjust'))
+        self.panel.noiseChanged.connect(self._on_noise_changed)
+        self.panel.compareAlgos.connect(self._on_compare_algos)
+        self.viewer.algoPicked.connect(self._on_algo_picked)
+        self.info_panel.metaRequested.connect(self.open_meta)
+        self.info_panel.stripSaveRequested.connect(self.save_without_meta)
+        self.info_panel.openRequested.connect(self.choose_image)
+        self.info_panel.batchRequested.connect(lambda: self.open_batch())
         self.viewer.zoomChanged.connect(lambda z: self.zoom_label.setText(f'{z * 100:.0f}%'))
         self.viewer.cursorMoved.connect(self._on_cursor)
         self.viewer.openRequested.connect(self.choose_image)
@@ -93,32 +96,6 @@ class MainWindow(QMainWindow):
     # ---- 画面の組み立て ----
 
     def _build(self):
-        rail = QFrame()
-        rail.setObjectName('rail')
-        rail.setFixedWidth(theme.RAIL_WIDTH)
-        self.open_btn = RailButton('open', '開く')
-        self.inspect_btn = RailButton('inspect', '確認', checkable=True)
-        self.adjust_btn = RailButton('adjust', '調整', checkable=True)
-        self.batch_btn = RailButton('batch', '一括')
-        stages = QButtonGroup(self)
-        stages.addButton(self.inspect_btn)
-        stages.addButton(self.adjust_btn)
-        self.inspect_btn.setChecked(True)
-        self.inspect_btn.clicked.connect(lambda: self.set_stage('inspect'))
-        self.adjust_btn.clicked.connect(lambda: self.set_stage('adjust'))
-        self.open_btn.clicked.connect(self.choose_image)
-        self.batch_btn.clicked.connect(lambda: self.open_batch())
-        self.open_btn.setToolTip('画像を開く')
-        self.inspect_btn.setToolTip('画像の状態を確認')
-        self.adjust_btn.setToolTip('ノイズ除去を調整')
-        self.batch_btn.setToolTip('フォルダを一括処理')
-        rl = QVBoxLayout(rail)
-        rl.setContentsMargins(0, 12, 0, 12)
-        rl.setSpacing(4)
-        for b in (self.open_btn, self.inspect_btn, self.adjust_btn, self.batch_btn):
-            rl.addWidget(b, 0, Qt.AlignHCenter)
-        rl.addStretch(1)
-
         bar = QFrame()
         bar.setObjectName('bottomBar')
         bar.setFixedHeight(theme.BOTTOM_BAR_HEIGHT)
@@ -135,12 +112,10 @@ class MainWindow(QMainWindow):
         self.keep_meta_box = QCheckBox('メタデータを引き継ぐ')
         self.keep_meta_box.setChecked(True)
         self.keep_meta_box.setCursor(Qt.PointingHandCursor)
-        self.batch_wide_btn = button('フォルダを一括処理', 'secondary')
         self.save_btn = button('保存', 'primary')
         self.zoom_out_btn.clicked.connect(self.viewer.zoom_out)
         self.zoom_in_btn.clicked.connect(self.viewer.zoom_in)
         self.fit_btn.clicked.connect(self.viewer.fit)
-        self.batch_wide_btn.clicked.connect(lambda: self.open_batch())
         self.save_btn.clicked.connect(self.save)
         bl = QHBoxLayout(bar)
         bl.setContentsMargins(16, 0, 16, 0)
@@ -155,7 +130,6 @@ class MainWindow(QMainWindow):
         bl.addSpacing(8)
         bl.addWidget(self.keep_meta_box)
         bl.addSpacing(8)
-        bl.addWidget(self.batch_wide_btn)
         bl.addWidget(self.save_btn)
 
         center = QVBoxLayout()
@@ -168,19 +142,21 @@ class MainWindow(QMainWindow):
         lay = QHBoxLayout(root)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(rail)
-        self.stack = QStackedWidget()
-        self.stack.setFixedWidth(theme.PANEL_WIDTH)
-        self.stack.addWidget(self.inspect)
-        self.panel_scroll = QScrollArea()   # 調整パネルは項目が多いので、低い画面では縦に送れるようにする
-        self.panel_scroll.setObjectName('panelScroll')
-        self.panel_scroll.setWidget(self.panel)
-        self.panel_scroll.setWidgetResizable(True)
-        self.panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.stack.addWidget(self.panel_scroll)
+        lay.addWidget(self._scroll(self.info_panel, theme.LEFT_PANEL_WIDTH))
         lay.addLayout(center, 1)
-        lay.addWidget(self.stack)
+        lay.addWidget(self._scroll(self.panel, theme.PANEL_WIDTH))
         self.setCentralWidget(root)
+
+    @staticmethod
+    def _scroll(panel, width):
+        """項目が多いパネルを、低い画面では縦に送れるようにする"""
+        area = QScrollArea()
+        area.setObjectName('panelScroll')
+        area.setWidget(panel)
+        area.setWidgetResizable(True)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        area.setFixedWidth(width)
+        return area
 
     def showEvent(self, e):
         apply_dark_titlebar(self)
@@ -188,30 +164,16 @@ class MainWindow(QMainWindow):
 
     def _sync_enabled(self):
         has = self.source is not None
-        for w in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn, self.inspect_btn, self.adjust_btn,
-                  self.inspect, self.panel):
+        for w in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn, self.panel):
             w.setEnabled(has)
-        adjusting = has and self.stage == 'adjust'
-        self.save_btn.setVisible(adjusting)
-        self.keep_meta_box.setVisible(adjusting)
-        self.save_btn.setEnabled(adjusting and self.result is not None and not self._awaiting)
+        self.save_btn.setVisible(has)
+        self.keep_meta_box.setVisible(has)
+        self.save_btn.setEnabled(has and self.result is not None and not self._awaiting)
         self.viewer.set_busy(self._awaiting or self._analyzing > 0)
 
     @property
     def keep_meta(self):
         return self.keep_meta_box.isChecked()
-
-    def set_stage(self, stage):
-        """確認と調整を切り替える。ノイズ除去は調整に入ったときに初めて実行する"""
-        if self.source is None:
-            return
-        self.stage = stage
-        (self.adjust_btn if stage == 'adjust' else self.inspect_btn).setChecked(True)
-        self.stack.setCurrentWidget(self.panel_scroll if stage == 'adjust' else self.inspect)
-        self.viewer.set_mode(self.viewer.compare_mode if stage == 'adjust' else 'inspect')
-        self._sync_enabled()
-        if stage == 'adjust':
-            self._on_params(False)
 
     def _say(self, text):
         self.status.setText(text)
@@ -256,11 +218,12 @@ class MainWindow(QMainWindow):
         self._awaiting = False
         self._debounce.stop()
         self.viewer.set_source(to_qimage(src.display))
-        self.inspect.set_source(src)
-        for kind in ('before', 'after'):
-            self.panel.set_metrics(kind, None)
-        self.set_stage('inspect')
-        self._run_task(analyze_source, (src, self.viewer.noise_key()), self._on_analysis)
+        self.info_panel.set_source(src)
+        self._algos_key = None
+        self.panel.compare.setChecked(False)
+        self._sync_enabled()
+        self._run_task(analyze_source, (src, self.panel.noise_key()), self._on_analysis)
+        self._on_params(False)   # 開いたらすぐノイズ除去する
 
     def _run_task(self, fn, arg, on_done):
         task = Task(fn, arg, self)
@@ -279,26 +242,53 @@ class MainWindow(QMainWindow):
 
     def _on_analysis(self, r):
         if self._is_current(r):
-            if r['noise_key'] == self.viewer.noise_key():   # 違えば切り替え時の描き直しに任せる
+            if r['noise_key'] == self.panel.noise_key():   # 違えば切り替え時の描き直しに任せる
                 self.viewer.set_layer('noise_orig', to_qimage(r['noise']))
-            self.panel.set_metrics('before', r['metrics'])
-            self.panel.set_background(r['uniform_bg'])
-            self.inspect.set_analysis(r['metrics'], r['uniform_bg'])
+            self.info_panel.set_analysis(r['metrics'], r['uniform_bg'])
 
     # ---- ノイズの表示方式 ----
 
     def _on_noise_changed(self, *_):
+        self.viewer.set_noise(*self.panel.noise_key())
         if self.source is None:
             return
         self.viewer.clear_patch()
-        self._run_task(render_noise, (self.source, self.result, self.viewer.noise_key()), self._on_noise_rendered)
+        self._run_task(render_noise, (self.source, self.result, self.panel.noise_key()), self._on_noise_rendered)
+        if self.viewer.mode == 'algos':
+            self._render_algos()
 
     def _on_noise_rendered(self, r):
-        if not self._is_current(r) or r['noise_key'] != self.viewer.noise_key():
+        if not self._is_current(r) or r['noise_key'] != self.panel.noise_key():
             return
         self.viewer.set_layer('noise_orig', to_qimage(r['orig']))
         if r['after'] is not None and r['result'] is self.result:
             self.viewer.set_layer('noise_result', to_qimage(r['after']))
+
+    # ---- 抽出方式の4通り比較 ----
+
+    def _on_compare_algos(self, on):
+        if self.source is None:
+            return
+        if on:
+            self.viewer.set_mode('algos')
+            self._render_algos()
+        else:
+            self.viewer.set_mode(self.viewer.compare_mode)
+
+    def _render_algos(self):
+        key = (self.source.id, self.panel.noise_key()[1])
+        if key != self._algos_key:
+            self._algos_key = key
+            self._run_task(render_algos, (self.source, key[1]), self._on_algos_rendered)
+
+    def _on_algos_rendered(self, r):
+        if self._is_current(r) and r['style'] == self.panel.noise_key()[1]:
+            for k, rgb in r['layers'].items():
+                self.viewer.set_layer(f'algo_{k}', to_qimage(rgb))
+
+    def _on_algo_picked(self, key):
+        self.panel.set_algo(key)
+        self.panel.compare.setChecked(False)   # 選んだら元の表示に戻る
 
     # ---- 処理 ----
 
@@ -316,7 +306,7 @@ class MainWindow(QMainWindow):
         self._on_params(False)
 
     def _on_params(self, interactive):
-        if self.source is None or self.stage != 'adjust':
+        if self.source is None:
             return
         params = self._params()
         if self.result is not None and self.result['params'] == params:
@@ -337,11 +327,11 @@ class MainWindow(QMainWindow):
         rect = clamp_preview_rect(rect, self.viewer.view_center())
         key, smoothed = self._smoothed
         reuse = smoothed if key == (self.source.id, params.smooth_key) else None
-        self.preview.submit((self.source, params, rect, reuse, self.viewer.noise_key()))
+        self.preview.submit((self.source, params, rect, reuse, self.panel.noise_key()))
 
     def _submit_full(self):
         if self.source is not None:
-            self.full.submit((self.source, self._params(), self.viewer.noise_key()))
+            self.full.submit((self.source, self._params(), self.panel.noise_key()))
 
     def _on_preview(self, r):
         current = self.source is not None and r['source_id'] == self.source.id
@@ -352,7 +342,7 @@ class MainWindow(QMainWindow):
                 # 透過の設定が変わっていなければ、前回の全体処理の透明部分を借りて見た目をそろえる
                 x0, y0, x1, y1 = r['rect']
                 view = composite_on_checker(view, last['alpha'][y0:y1, x0:x1], (x0, y0))
-            fresh = r['noise'] is not None and r['noise_key'] == self.viewer.noise_key()
+            fresh = r['noise'] is not None and r['noise_key'] == self.panel.noise_key()
             noise_img = to_qimage(r['noise']) if fresh else None
             self.viewer.set_patch(r['rect'], to_qimage(view), noise_img, mask_to_qimage(r['mask']))
 
@@ -365,13 +355,13 @@ class MainWindow(QMainWindow):
         self.result = r
         self._awaiting = False
         self.viewer.set_layer('result', to_qimage(r['view']))
-        if r['noise_key'] == self.viewer.noise_key():
+        if r['noise_key'] == self.panel.noise_key():
             self.viewer.set_layer('noise_result', to_qimage(r['noise']))
         else:   # 処理中に表示方式が切り替わった
             self._on_noise_changed()
         self.viewer.set_layer('mask', mask_to_qimage(r['mask']))
         self.viewer.clear_patch()
-        self.panel.set_metrics('after', r['metrics'])
+        self.info_panel.set_metrics('after', r['metrics'])
         self.panel.show_tolerance(r['tolerance'])
         self._sync_enabled()
 

@@ -1,4 +1,4 @@
-"""比較ビュー（スライド比較・4分割、拡大と移動）"""
+"""比較ビュー（スライド比較・4分割・抽出方式の4通り比較、拡大と移動）"""
 import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QWidget
 
 import noise
 from . import icons, theme
-from .widgets import Dropdown, Segmented
+from .widgets import Segmented
 
 ZOOM_STEP = 1.25
 ZOOM_MIN, ZOOM_MAX = 0.05, 32.0
@@ -21,15 +21,21 @@ OVERLAY_TOP = 12        # 上部の切り替えボタンの位置
 OVERLAY_GAP = 8
 CHIP_ROOM = 150         # スライド比較の左右上のラベルに空けておく幅
 NOISE_BG = '#101010'
+CLICK_SLOP = 4          # これ以下の移動ならドラッグでなくクリックとみなす（画面上の画素）
 
 # 複数の画面を並べるモードで、各画面に出すレイヤー
+ALGO_LAYERS = {f'algo_{k}': k for k in noise.ALGOS}   # 抽出方式ごとの、元画像のノイズ
 GRID_LAYERS = {
     'quad': ('orig', 'result', 'noise_orig', 'noise_result'),
-    'inspect': ('orig', 'noise_orig'),   # 処理前の状態確認用
+    'algos': tuple(ALGO_LAYERS),
 }
-LABELS = {'orig': '元画像', 'result': '処理後', 'noise_orig': 'ノイズ（元画像）', 'noise_result': 'ノイズ（処理後）'}
-INSPECT_LABELS = {'orig': '画像', 'noise_orig': '塗り面ノイズ'}
+LABELS = {'orig': '元画像', 'result': '処理後', 'noise_orig': 'ノイズ（元画像）', 'noise_result': 'ノイズ（処理後）',
+          **{layer: noise.ALGOS[k][0] for layer, k in ALGO_LAYERS.items()}}
 AFTER_LAYERS = ('result', 'noise_result')
+
+
+def _is_noise(name):
+    return name.startswith(('noise', 'algo_'))
 
 
 class Viewer(QWidget):
@@ -37,7 +43,7 @@ class Viewer(QWidget):
     cursorMoved = Signal(int, int)   # 画像上の座標。画像の外では (-1, -1)
     openRequested = Signal()
     picked = Signal(int, int)        # 選択モードで画像上をクリックした座標
-    noiseChanged = Signal(str, str)  # ノイズの (抽出方式, 表示方式)
+    algoPicked = Signal(str)         # 4通りの比較でクリックされた抽出方式
 
     def __init__(self):
         super().__init__()
@@ -49,8 +55,11 @@ class Viewer(QWidget):
         self._patch = None
         self._size = None
         self._thumb = None
-        self.mode = 'inspect'
-        self.compare_mode = 'quad'   # 調整画面に入ったときの表示
+        self.mode = 'quad'
+        self.compare_mode = 'quad'   # 4通りの比較を閉じたときに戻る表示
+        self.noise_style = 'strength'
+        self.current_algo = next(iter(noise.ALGOS))
+        self._press_at = None        # クリックとドラッグを見分けるための、押した位置
         self.view = 'image'
         self.show_mask = False
         self.split = 0.5
@@ -71,12 +80,6 @@ class Viewer(QWidget):
         self.mode_seg.set_value(self.compare_mode)
         self.mode_seg.changed.connect(self.set_mode)
         self.view_seg.changed.connect(self.set_view)
-        self.algo_drop = Dropdown('抽出', [(k, name, desc) for k, (name, desc) in noise.ALGOS.items()])
-        self.style_drop = Dropdown('表示', [(k, name, desc) for k, (name, desc) in noise.STYLES.items()])
-        for drop in (self.algo_drop, self.style_drop):
-            drop.setParent(self)
-            drop.setFixedHeight(40)
-            drop.changed.connect(self._on_noise_drop)
         self._overlay_bottom = 0   # 上部の切り替えボタンの下端と左端（ラベルと重ならないようにするため）
         self._overlay_left = 0
 
@@ -124,7 +127,7 @@ class Viewer(QWidget):
 
     def set_mode(self, mode):
         self.mode = mode
-        if mode != 'inspect':
+        if mode != 'algos':
             self.compare_mode = mode
             self.mode_seg.set_value(mode)
         self._sync_overlays()
@@ -138,16 +141,8 @@ class Viewer(QWidget):
         self._sync_overlays()
         self.update()
 
-    def noise_key(self):
-        return self.algo_drop.value(), self.style_drop.value()
-
-    def set_noise_key(self, algo, style):
-        self.algo_drop.set_value(algo)
-        self.style_drop.set_value(style)
-        self._on_noise_drop(None)
-
-    def _on_noise_drop(self, _):
-        self.noiseChanged.emit(*self.noise_key())
+    def set_noise(self, algo, style):
+        self.current_algo, self.noise_style = algo, style
         self.update()
 
     def set_show_mask(self, on):
@@ -173,20 +168,15 @@ class Viewer(QWidget):
         self.update(0, 0, self.width(), 3)
 
     def _sync_overlays(self):
-        self.mode_seg.setVisible(self.has_image() and self.mode != 'inspect')
+        self.mode_seg.setVisible(self.has_image() and self.mode != 'algos')
         self.view_seg.setVisible(self.has_image() and self.mode == 'slide')
-        shows_noise = self.mode != 'slide' or self.view == 'noise'
-        for drop in (self.algo_drop, self.style_drop):
-            drop.adjustSize()
-            drop.setVisible(self.has_image() and shows_noise)
         self._place_overlays()
 
     def _place_overlays(self):
-        """上部中央に横一列で並べる。入りきらなければノイズの切り替えを2段目に送る"""
-        modes = [w for w in (self.mode_seg, self.view_seg) if w.isVisibleTo(self)]
-        drops = [w for w in (self.algo_drop, self.style_drop) if w.isVisibleTo(self)]
+        """上部中央に横一列で並べる。入りきらなければ2段にする"""
+        widgets = [w for w in (self.mode_seg, self.view_seg) if w.isVisibleTo(self)]
         span = lambda ws: sum(w.width() for w in ws) + OVERLAY_GAP * max(0, len(ws) - 1)
-        rows = [modes + drops] if span(modes + drops) <= self.width() - 2 * OVERLAY_MARGIN else [modes, drops]
+        rows = [widgets] if span(widgets) <= self.width() - 2 * OVERLAY_MARGIN else [[w] for w in widgets]
         y = OVERLAY_TOP
         self._overlay_bottom = 0
         self._overlay_left = self.width()
@@ -208,8 +198,6 @@ class Viewer(QWidget):
         if self.mode == 'slide':
             return [QRectF(0, 0, w, h)]
         cw, ch = (w - CELL_GAP) / 2, (h - CELL_GAP) / 2
-        if self.mode == 'inspect':
-            return [QRectF(x, 0, cw, h) for x in (0, cw + CELL_GAP)]
         return [QRectF(x, y, cw, ch) for y in (0, ch + CELL_GAP) for x in (0, cw + CELL_GAP)]
 
     def _cell_at(self, pos):
@@ -330,6 +318,7 @@ class Viewer(QWidget):
             self._drag = 'pan'
             self.setCursor(Qt.ClosedHandCursor)
         self._drag_from = pos
+        self._press_at = pos
 
     def mouseMoveEvent(self, e):
         if not self.has_image():
@@ -366,6 +355,15 @@ class Viewer(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, e):
+        pos, start = e.position(), self._press_at
+        self._press_at = None
+        if (self.mode == 'algos' and self._drag == 'pan' and start is not None
+                and (pos - start).manhattanLength() <= CLICK_SLOP):
+            cells = self._cells()
+            for cell, name in zip(cells, GRID_LAYERS['algos']):
+                if cell.contains(pos):
+                    self.algoPicked.emit(ALGO_LAYERS[name])
+                    break
         self._drag = None
         if self.has_image():
             self.setCursor(Qt.CrossCursor if self.pick_mode else Qt.OpenHandCursor)
@@ -416,7 +414,7 @@ class Viewer(QWidget):
             img = self._layers.get('orig')
         p.save()
         p.setClipRect(clip)
-        if name.startswith('noise'):
+        if _is_noise(name):
             p.fillRect(clip, QColor(NOISE_BG))
         if img is not None:
             z = self.zoom
@@ -432,7 +430,7 @@ class Viewer(QWidget):
                 src = QRectF(sx0, sy0, sx1 - sx0, sy1 - sy0)
                 p.drawImage(QRectF(o.x() + sx0 * z, o.y() + sy0 * z, src.width() * z, src.height() * z), img, src)
                 self._draw_patch(p, o, name)
-                if self.show_mask and not name.startswith('noise'):
+                if self.show_mask and not _is_noise(name):
                     self._draw_mask(p, o)
         p.restore()
 
@@ -488,22 +486,26 @@ class Viewer(QWidget):
         for cell, name in zip(self._cells(), GRID_LAYERS[self.mode]):
             p.fillRect(cell, QColor(theme.CANVAS))
             self._draw_layer(p, cell, cell, name)
-            spectrum = name.startswith('noise') and self.style_drop.value() == 'spectrum'
+            spectrum = _is_noise(name) and self.noise_style == 'spectrum'
             if self._cursor is not None and not spectrum:   # 同じ位置を見比べるための十字線
                 o = self._origin(cell)
                 x = o.x() + self._cursor[0] * self.zoom
                 y = o.y() + self._cursor[1] * self.zoom
                 p.save()
                 p.setClipRect(cell)
-                p.setPen(QPen(QColor(236, 232, 225, 80) if name.startswith('noise') else QColor(18, 17, 16, 90), 1))
+                p.setPen(QPen(QColor(236, 232, 225, 80) if _is_noise(name) else QColor(18, 17, 16, 90), 1))
                 p.drawLine(QPointF(x, cell.top()), QPointF(x, cell.bottom()))
                 p.drawLine(QPointF(cell.left(), y), QPointF(cell.right(), y))
                 p.restore()
             p.setRenderHint(QPainter.Antialiasing)
-            color = theme.ACCENT if name in AFTER_LAYERS else theme.TEXT
-            text = LABELS[name] if self.mode == 'quad' else INSPECT_LABELS[name]
+            chosen = ALGO_LAYERS.get(name) == self.current_algo
+            color = theme.ACCENT if name in AFTER_LAYERS or chosen else theme.TEXT
+            text = LABELS[name] + ('（選択中）' if chosen else '')
             self._chip(p, text, QPointF(cell.left() + 12, cell.bottom() - 12), color, bottom=True)
             p.setRenderHint(QPainter.Antialiasing, False)
+        if self.mode == 'algos':
+            p.setRenderHint(QPainter.Antialiasing)
+            self._chip(p, 'クリックで抽出方式を選ぶ', QPointF(OVERLAY_MARGIN, OVERLAY_MARGIN), theme.ACCENT)
 
     def _chip(self, p, text, anchor, color, right_aligned=False, bottom=False):
         font = QFont(theme.FONT_UI, 9)
