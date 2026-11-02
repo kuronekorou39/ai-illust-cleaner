@@ -1,7 +1,7 @@
 """GUIの見た目を確認するためのスクリーンショットを撮る
 
 使い方: python tools/gui_shot.py [画像.png] [--out 出力フォルダ] [--center x,y] [--zoom 倍率]
-空の状態・確認画面・4分割・スライド比較（画像／ノイズ）・線マスク表示を順に保存する
+空の状態・確認画面・4分割・スライド比較（画像／ノイズ）・線マスク表示・ノイズの表示方式の切り替えを順に保存する
 """
 import argparse, sys
 from pathlib import Path
@@ -73,4 +73,14 @@ shot('4_slide_noise')
 win.viewer.set_view('image')
 win.panel.show_mask.setChecked(True)
 shot('5_slide_mask')
+win.panel.show_mask.setChecked(False)
+
+win.viewer.set_mode('quad')
+win.viewer.set_noise_key('bilateral', 'chroma')
+settle()
+shot('6_quad_chroma')
+win.viewer.fit()
+win.viewer.set_noise_key('median', 'spectrum')
+settle()
+shot('7_quad_spectrum')
 win.close()

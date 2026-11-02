@@ -1,14 +1,11 @@
 """表示用の画像変換（白背景合成・ノイズマップ・QImage化）"""
-import cv2
 import numpy as np
 from PySide6.QtGui import QColor, QImage
 
-from common import fill_noise
+import noise
 from . import theme
 
-NOISE_FULL_SCALE = 3.0    # ノイズマップで最大輝度になるノイズ強度（階調）
-LINE_HINT_BASE = 16       # ノイズマップの地の明るさ
-LINE_HINT_GAIN = 0.10     # ノイズマップにうっすら重ねる線画の濃さ
+DEFAULT_NOISE = ('median', 'strength')   # ノイズの (抽出方式, 表示方式)
 MASK_OVERLAY_ALPHA = 150  # 線マスク表示の最大不透明度
 CHECKER_CELL = 12         # 透明部分を示す市松模様の1マス（画像の画素数）
 CHECKER_COLORS = (72, 96)   # 白い縁の残りが分かるよう暗めにする
@@ -32,19 +29,21 @@ def composite_on_checker(rgb, alpha, origin=(0, 0)):
     return np.round(rgb.astype(np.float32) * a + board * (1 - a)).astype(np.uint8)
 
 
-def noise_view(display):
-    """(ノイズマップRGB, ノイズ平均, 1階調超の画素率%) を返す"""
-    rgb = display.astype(float)
-    res, _, m = fill_noise(rgb)
-    mag = np.sqrt((res ** 2).sum(2))
-    level = np.clip(mag / NOISE_FULL_SCALE * 255, 0, 255).astype(np.uint8)
-    heat = cv2.cvtColor(cv2.applyColorMap(level, cv2.COLORMAP_INFERNO), cv2.COLOR_BGR2RGB)
-    base = LINE_HINT_BASE + (255 - rgb.mean(2)) * LINE_HINT_GAIN
-    view = np.maximum(heat, base[..., None].astype(np.uint8))
-    if m.size == 0:   # 全面が線と判定された場合
-        return view, 0.0, 0.0
-    return view, float(m.mean()), float((m > 1).mean() * 100)
+def noise_view(display, key=DEFAULT_NOISE):
+    """(ノイズ表示RGB, ノイズ平均, 1階調超の画素率%) を返す。指標は表示方式によらずメディアン差で計算する"""
+    algo, style = key
+    res, edge = noise.extract(display)
+    mean, over = noise.metrics(res, edge)
+    if algo != 'median':
+        res, _ = noise.extract(display, algo)
+    return noise.render(display, res, style), mean, over
 
+
+def noise_image(display, key=DEFAULT_NOISE):
+    """ノイズ表示RGBだけを返す"""
+    algo, style = key
+    res, _ = noise.extract(display, algo)
+    return noise.render(display, res, style)
 
 def to_qimage(rgb):
     rgb = np.ascontiguousarray(rgb)

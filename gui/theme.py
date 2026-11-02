@@ -91,6 +91,16 @@ QPushButton[kind="seg"] { border: none; border-radius: 6px; font-size: 12px; col
 QPushButton[kind="seg"]:hover { color: @TEXT; }
 QPushButton[kind="seg"]:checked { background: @BORDER_STRONG; color: @TEXT; font-weight: 500; }
 
+QPushButton[kind="drop"] { background: @BG; border: 1px solid @BORDER; border-radius: 8px; font-size: 12px;
+    color: @TEXT; min-height: 38px; padding: 0 14px; }
+QPushButton[kind="drop"]:hover { border-color: @BORDER_STRONG; }
+QPushButton[kind="drop"]::menu-indicator { width: 0; image: none; }
+QMenu { background: @SURFACE; border: 1px solid @BORDER_STRONG; padding: 4px; }
+QMenu::item { padding: 6px 20px 6px 28px; border-radius: 4px; font-size: 12px; }
+QMenu::item:selected { background: @BORDER_STRONG; }
+QMenu::item:checked { color: @ACCENT; }
+QMenu::indicator { width: 0; }
+
 QSlider::groove:horizontal { height: 4px; background: @BORDER_STRONG; border-radius: 2px; }
 QSlider::sub-page:horizontal { background: @ACCENT; border-radius: 2px; }
 QSlider::handle:horizontal { width: 16px; height: 16px; margin: -6px 0; border-radius: 8px; background: @TEXT; }

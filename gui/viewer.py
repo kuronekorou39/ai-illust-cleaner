@@ -5,8 +5,9 @@ from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
+import noise
 from . import icons, theme
-from .widgets import Segmented
+from .widgets import Dropdown, Segmented
 
 ZOOM_STEP = 1.25
 ZOOM_MIN, ZOOM_MAX = 0.05, 32.0
@@ -16,6 +17,9 @@ HANDLE_RADIUS = 20
 CELL_GAP = 2
 MINIMAP_SIDE = 120
 OVERLAY_MARGIN = 16
+OVERLAY_TOP = 12        # 上部の切り替えボタンの位置
+OVERLAY_GAP = 8
+CHIP_ROOM = 150         # スライド比較の左右上のラベルに空けておく幅
 NOISE_BG = '#101010'
 
 # 複数の画面を並べるモードで、各画面に出すレイヤー
@@ -33,6 +37,7 @@ class Viewer(QWidget):
     cursorMoved = Signal(int, int)   # 画像上の座標。画像の外では (-1, -1)
     openRequested = Signal()
     picked = Signal(int, int)        # 選択モードで画像上をクリックした座標
+    noiseChanged = Signal(str, str)  # ノイズの (抽出方式, 表示方式)
 
     def __init__(self):
         super().__init__()
@@ -66,6 +71,14 @@ class Viewer(QWidget):
         self.mode_seg.set_value(self.compare_mode)
         self.mode_seg.changed.connect(self.set_mode)
         self.view_seg.changed.connect(self.set_view)
+        self.algo_drop = Dropdown('抽出', [(k, name, desc) for k, (name, desc) in noise.ALGOS.items()])
+        self.style_drop = Dropdown('表示', [(k, name, desc) for k, (name, desc) in noise.STYLES.items()])
+        for drop in (self.algo_drop, self.style_drop):
+            drop.setParent(self)
+            drop.setFixedHeight(40)
+            drop.changed.connect(self._on_noise_drop)
+        self._overlay_bottom = 0   # 上部の切り替えボタンの下端と左端（ラベルと重ならないようにするため）
+        self._overlay_left = 0
 
         self._busy = False
         self._phase = 0.0
@@ -92,7 +105,7 @@ class Viewer(QWidget):
         self.update()
 
     def set_patch(self, rect, display, noise, mask):
-        """表示範囲だけ先に処理した結果を、全体の結果の上に重ねる"""
+        """表示範囲だけ先に処理した結果を、全体の結果の上に重ねる。noise が None ならノイズは全体の結果のまま"""
         self._patch = {'rect': rect, 'result': display, 'noise_result': noise, 'mask': mask}
         self.update()
 
@@ -122,6 +135,19 @@ class Viewer(QWidget):
     def set_view(self, view):
         self.view = view
         self.view_seg.set_value(view)
+        self._sync_overlays()
+        self.update()
+
+    def noise_key(self):
+        return self.algo_drop.value(), self.style_drop.value()
+
+    def set_noise_key(self, algo, style):
+        self.algo_drop.set_value(algo)
+        self.style_drop.set_value(style)
+        self._on_noise_drop(None)
+
+    def _on_noise_drop(self, _):
+        self.noiseChanged.emit(*self.noise_key())
         self.update()
 
     def set_show_mask(self, on):
@@ -149,14 +175,31 @@ class Viewer(QWidget):
     def _sync_overlays(self):
         self.mode_seg.setVisible(self.has_image() and self.mode != 'inspect')
         self.view_seg.setVisible(self.has_image() and self.mode == 'slide')
+        shows_noise = self.mode != 'slide' or self.view == 'noise'
+        for drop in (self.algo_drop, self.style_drop):
+            drop.adjustSize()
+            drop.setVisible(self.has_image() and shows_noise)
         self._place_overlays()
 
     def _place_overlays(self):
-        gap = 8
-        total = self.mode_seg.width() + (gap + self.view_seg.width() if self.view_seg.isVisibleTo(self) else 0)
-        x = (self.width() - total) // 2
-        self.mode_seg.move(x, 12)
-        self.view_seg.move(x + self.mode_seg.width() + gap, 12)
+        """上部中央に横一列で並べる。入りきらなければノイズの切り替えを2段目に送る"""
+        modes = [w for w in (self.mode_seg, self.view_seg) if w.isVisibleTo(self)]
+        drops = [w for w in (self.algo_drop, self.style_drop) if w.isVisibleTo(self)]
+        span = lambda ws: sum(w.width() for w in ws) + OVERLAY_GAP * max(0, len(ws) - 1)
+        rows = [modes + drops] if span(modes + drops) <= self.width() - 2 * OVERLAY_MARGIN else [modes, drops]
+        y = OVERLAY_TOP
+        self._overlay_bottom = 0
+        self._overlay_left = self.width()
+        for row in rows:
+            if not row:
+                continue
+            x = (self.width() - span(row)) // 2
+            self._overlay_left = min(self._overlay_left, x)
+            for w in row:
+                w.move(x, y)
+                x += w.width() + OVERLAY_GAP
+            self._overlay_bottom = y + max(w.height() for w in row)
+            y = self._overlay_bottom + OVERLAY_GAP
 
     # ---- 拡大と移動 ----
 
@@ -399,7 +442,7 @@ class Viewer(QWidget):
         return QRectF(o.x() + x0 * z, o.y() + y0 * z, (x1 - x0) * z, (y1 - y0) * z)
 
     def _draw_patch(self, p, o, name):
-        if self._patch is not None and name in AFTER_LAYERS:
+        if self._patch is not None and name in AFTER_LAYERS and self._patch[name] is not None:
             p.drawImage(self._patch_target(o), self._patch[name])
 
     def _draw_mask(self, p, o):
@@ -434,8 +477,8 @@ class Viewer(QWidget):
         p.setBrush(Qt.NoBrush)
         p.drawPath(arrows)
 
-        # 幅が狭いときは、上部中央の切り替えボタンと重ならないよう一段下げる
-        top = OVERLAY_MARGIN if self.width() >= 680 else OVERLAY_MARGIN + 44
+        # 幅が狭いときは、上部中央の切り替えボタンと重ならないよう、その下に置く
+        top = OVERLAY_MARGIN if self._overlay_left >= CHIP_ROOM else self._overlay_bottom + OVERLAY_GAP
         self._chip(p, LABELS[left], QPointF(OVERLAY_MARGIN, top), theme.TEXT)
         self._chip(p, LABELS[right], QPointF(cell.width() - OVERLAY_MARGIN, top), theme.ACCENT, right_aligned=True)
         self._paint_minimap(p)
@@ -445,7 +488,8 @@ class Viewer(QWidget):
         for cell, name in zip(self._cells(), GRID_LAYERS[self.mode]):
             p.fillRect(cell, QColor(theme.CANVAS))
             self._draw_layer(p, cell, cell, name)
-            if self._cursor is not None:   # 同じ位置を見比べるための十字線
+            spectrum = name.startswith('noise') and self.style_drop.value() == 'spectrum'
+            if self._cursor is not None and not spectrum:   # 同じ位置を見比べるための十字線
                 o = self._origin(cell)
                 x = o.x() + self._cursor[0] * self.zoom
                 y = o.y() + self._cursor[1] * self.zoom

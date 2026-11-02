@@ -10,7 +10,8 @@ from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
 from cutout import cutout, is_uniform_background, merge_alpha
 from denoise import blend, line_mask, smooth
-from .imaging import composite_on_checker, composite_on_white, noise_view
+import noise
+from .imaging import composite_on_checker, composite_on_white, noise_image, noise_view
 
 PREVIEW_PAD = 24         # プレビュー領域の外側に足す余白（端の影響を表示範囲に入れないため）
 PREVIEW_MAX_SIDE = 512   # プレビューで処理する領域の一辺の上限
@@ -104,7 +105,7 @@ class FullProcessor:
         self._smoothed = None
 
     def __call__(self, job):
-        src, params = job
+        src, params, noise_key = job
         key = (src.id, params.smooth_key)
         if key != self._cache_key:
             self._smoothed = smooth(src.rgb, params.mode, params.lam)
@@ -118,11 +119,11 @@ class FullProcessor:
             result, cut, tolerance = cutout(result, params.tolerance, params.holes, params.toggles)
             alpha = merge_alpha(cut, src.alpha)
             view = composite_on_checker(result, alpha)
-        noise, mean, over = noise_view(display)
+        noise_rgb, mean, over = noise_view(display, noise_key)
         a, b = src.display.astype(float), display.astype(float)
         return {
-            'source_id': src.id, 'params': params,
-            'result': result, 'alpha': alpha, 'display': display, 'view': view, 'noise': noise, 'mask': mask,
+            'source_id': src.id, 'params': params, 'noise_key': noise_key,
+            'result': result, 'alpha': alpha, 'display': display, 'view': view, 'noise': noise_rgb, 'mask': mask,
             'tolerance': tolerance,
             'smoothed': self._smoothed,
             'metrics': {
@@ -142,7 +143,7 @@ class PreviewProcessor:
         self._smoothed = None
 
     def __call__(self, job):
-        src, params, rect, smoothed_full = job
+        src, params, rect, smoothed_full, noise_key = job
         x0, y0, x1, y1 = rect
         h, w = src.rgb.shape[:2]
         px0, py0 = max(0, x0 - PREVIEW_PAD), max(0, y0 - PREVIEW_PAD)
@@ -161,19 +162,30 @@ class PreviewProcessor:
         mask = line_mask(crop, params.dark, params.grad)
         alpha = None if src.alpha is None else src.alpha[py0:py1, px0:px1]
         display = composite_on_white(blend(crop, smoothed, mask), alpha)
-        noise, _, _ = noise_view(display)
         inner = np.s_[y0 - py0:y1 - py0, x0 - px0:x1 - px0]
+        # 周波数の表示は画像全体から計算するもので、切り出しでは作れない
+        spatial = noise_key[1] in noise.SPATIAL_STYLES
         return {
-            'source_id': src.id, 'params': params, 'rect': rect,
-            'display': display[inner], 'noise': noise[inner], 'mask': mask[inner],
+            'source_id': src.id, 'params': params, 'rect': rect, 'noise_key': noise_key,
+            'display': display[inner], 'noise': noise_image(display, noise_key)[inner] if spatial else None,
+            'mask': mask[inner],
         }
 
 
-def analyze_source(src):
+def analyze_source(job):
     """元画像のノイズマップ・指標・背景が単色か"""
-    noise, mean, over = noise_view(src.display)
-    return {'source_id': src.id, 'noise': noise, 'metrics': {'mean': mean, 'over': over},
+    src, noise_key = job
+    noise_rgb, mean, over = noise_view(src.display, noise_key)
+    return {'source_id': src.id, 'noise_key': noise_key, 'noise': noise_rgb, 'metrics': {'mean': mean, 'over': over},
             'uniform_bg': is_uniform_background(src.display)}
+
+
+def render_noise(job):
+    """表示方式を切り替えたときに、元画像と処理後のノイズマップを描き直す"""
+    src, result, noise_key = job
+    return {'source_id': src.id, 'noise_key': noise_key, 'result': result,
+            'orig': noise_image(src.display, noise_key),
+            'after': None if result is None else noise_image(result['display'], noise_key)}
 
 
 def clamp_preview_rect(rect, center):

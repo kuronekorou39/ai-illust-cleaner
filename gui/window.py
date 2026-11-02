@@ -16,7 +16,7 @@ from .viewer import Viewer
 from .widgets import RailButton, button, icon_button, label
 from .winchrome import apply_dark_titlebar
 from .worker import (FullProcessor, LatestWorker, PreviewProcessor, Source, analyze_source,
-                     clamp_preview_rect)
+                     clamp_preview_rect, render_noise)
 
 APP_NAME = 'ai-illust-cleaner'
 NO_META_SUFFIX = '_nometa'   # メタデータだけ消して保存するときの既定のファイル名の末尾
@@ -80,6 +80,7 @@ class MainWindow(QMainWindow):
         self.panel.pick.toggled.connect(self.viewer.set_pick_mode)
         self.panel.pick_clear.clicked.connect(self._clear_toggles)
         self.viewer.picked.connect(self._on_picked)
+        self.viewer.noiseChanged.connect(self._on_noise_changed)
         self.inspect.metaRequested.connect(self.open_meta)
         self.inspect.stripSaveRequested.connect(self.save_without_meta)
         self.inspect.proceedRequested.connect(lambda: self.set_stage('adjust'))
@@ -254,7 +255,7 @@ class MainWindow(QMainWindow):
         for kind in ('before', 'after'):
             self.panel.set_metrics(kind, None)
         self.set_stage('inspect')
-        self._run_task(analyze_source, src, self._on_analysis)
+        self._run_task(analyze_source, (src, self.viewer.noise_key()), self._on_analysis)
 
     def _run_task(self, fn, arg, on_done):
         task = Task(fn, arg, self)
@@ -268,12 +269,31 @@ class MainWindow(QMainWindow):
         self._analyzing -= 1
         self._sync_enabled()
 
+    def _is_current(self, r):
+        return self.source is not None and r['source_id'] == self.source.id
+
     def _on_analysis(self, r):
-        if self.source is not None and r['source_id'] == self.source.id:
-            self.viewer.set_layer('noise_orig', to_qimage(r['noise']))
+        if self._is_current(r):
+            if r['noise_key'] == self.viewer.noise_key():   # 違えば切り替え時の描き直しに任せる
+                self.viewer.set_layer('noise_orig', to_qimage(r['noise']))
             self.panel.set_metrics('before', r['metrics'])
             self.panel.set_background(r['uniform_bg'])
             self.inspect.set_analysis(r['metrics'], r['uniform_bg'])
+
+    # ---- ノイズの表示方式 ----
+
+    def _on_noise_changed(self, *_):
+        if self.source is None:
+            return
+        self.viewer.clear_patch()
+        self._run_task(render_noise, (self.source, self.result, self.viewer.noise_key()), self._on_noise_rendered)
+
+    def _on_noise_rendered(self, r):
+        if not self._is_current(r) or r['noise_key'] != self.viewer.noise_key():
+            return
+        self.viewer.set_layer('noise_orig', to_qimage(r['orig']))
+        if r['after'] is not None and r['result'] is self.result:
+            self.viewer.set_layer('noise_result', to_qimage(r['after']))
 
     # ---- 処理 ----
 
@@ -312,11 +332,11 @@ class MainWindow(QMainWindow):
         rect = clamp_preview_rect(rect, self.viewer.view_center())
         key, smoothed = self._smoothed
         reuse = smoothed if key == (self.source.id, params.smooth_key) else None
-        self.preview.submit((self.source, params, rect, reuse))
+        self.preview.submit((self.source, params, rect, reuse, self.viewer.noise_key()))
 
     def _submit_full(self):
         if self.source is not None:
-            self.full.submit((self.source, self._params()))
+            self.full.submit((self.source, self._params(), self.viewer.noise_key()))
 
     def _on_preview(self, r):
         current = self.source is not None and r['source_id'] == self.source.id
@@ -327,7 +347,9 @@ class MainWindow(QMainWindow):
                 # 透過の設定が変わっていなければ、前回の全体処理の透明部分を借りて見た目をそろえる
                 x0, y0, x1, y1 = r['rect']
                 view = composite_on_checker(view, last['alpha'][y0:y1, x0:x1], (x0, y0))
-            self.viewer.set_patch(r['rect'], to_qimage(view), to_qimage(r['noise']), mask_to_qimage(r['mask']))
+            fresh = r['noise'] is not None and r['noise_key'] == self.viewer.noise_key()
+            noise_img = to_qimage(r['noise']) if fresh else None
+            self.viewer.set_patch(r['rect'], to_qimage(view), noise_img, mask_to_qimage(r['mask']))
 
     def _on_full(self, r):
         if self.source is None or r['source_id'] != self.source.id:
@@ -338,7 +360,10 @@ class MainWindow(QMainWindow):
         self.result = r
         self._awaiting = False
         self.viewer.set_layer('result', to_qimage(r['view']))
-        self.viewer.set_layer('noise_result', to_qimage(r['noise']))
+        if r['noise_key'] == self.viewer.noise_key():
+            self.viewer.set_layer('noise_result', to_qimage(r['noise']))
+        else:   # 処理中に表示方式が切り替わった
+            self._on_noise_changed()
         self.viewer.set_layer('mask', mask_to_qimage(r['mask']))
         self.viewer.clear_patch()
         self.panel.set_metrics('after', r['metrics'])

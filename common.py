@@ -1,7 +1,8 @@
 """共通処理：画像読み込み・ノイズ指標"""
 import numpy as np
 from PIL import Image
-from scipy import ndimage
+
+import noise
 
 # AI生成ツールが書き込むPNGメタデータのキー（A1111の parameters、ComfyUIの prompt/workflow 等）
 AI_META_KEYS = ('parameters', 'prompt', 'workflow', 'Comment', 'Software')
@@ -32,16 +33,11 @@ def load_rgb_on_white(path):
 
 
 def fill_noise(rgb):
-    """線を除外した「塗り面」の微小ノイズを返す
+    """線を除外した「塗り面」の微小ノイズを返す（抽出はメディアン差）
     戻り値: (残差RGB, 線マスク, 塗り面のノイズ強度配列)
     """
-    g = rgb.mean(2)
-    edge = ndimage.binary_dilation(ndimage.gaussian_gradient_magnitude(g, 1.2) > 8, iterations=3)
-    res = rgb - ndimage.median_filter(rgb, size=(7, 7, 1))
-    res[edge] = 0
-    mag = np.sqrt((res ** 2).sum(2))
-    return res, edge, mag[~edge]
-
+    res, edge = noise.extract(rgb)
+    return res, edge, noise.magnitude(res)[~edge]
 
 def noise_score(rgb):
     """(ノイズ平均, 1階調超の画素率%) を返す"""

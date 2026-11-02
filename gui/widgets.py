@@ -1,7 +1,7 @@
 """共通の部品"""
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QCursor, QFont, QPainter
-from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+from PySide6.QtGui import QActionGroup, QColor, QCursor, QFont, QPainter
+from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy,
                                QSlider, QToolButton, QToolTip, QVBoxLayout, QWidget)
 
 from . import icons, theme
@@ -85,6 +85,46 @@ class Segmented(QFrame):
 
     def set_value(self, key):
         self._buttons[key].setChecked(True)
+
+
+class Dropdown(QPushButton):
+    """押すと選択肢の一覧が開くボタン。options は (キー, 表示名, 説明) の並び"""
+    changed = Signal(str)
+
+    def __init__(self, title, options):
+        super().__init__()
+        self.setProperty('kind', 'drop')
+        self.setCursor(Qt.PointingHandCursor)
+        self._title = title
+        self._names = {key: name for key, name, _ in options}
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        group = QActionGroup(menu)
+        self._actions = {}
+        for key, name, help_text in options:
+            act = menu.addAction(name)
+            act.setCheckable(True)
+            act.setToolTip(help_text)
+            act.triggered.connect(lambda _=False, k=key: self._pick(k))
+            group.addAction(act)
+            self._actions[key] = act
+        self.setMenu(menu)
+        self.setAccessibleName(title)
+        self.set_value(options[0][0])
+
+    def value(self):
+        return self._value
+
+    def set_value(self, key):
+        self._value = key
+        self._actions[key].setChecked(True)
+        self.setText(f'{self._title}  {self._names[key]}  ▾')
+        self.setToolTip(self._actions[key].toolTip())
+
+    def _pick(self, key):
+        if key != self._value:
+            self.set_value(key)
+            self.changed.emit(key)
 
 
 class SliderRow(QWidget):
