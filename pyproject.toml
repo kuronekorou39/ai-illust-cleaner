@@ -13,3 +13,8 @@ dependencies = [
     "scikit-image",
     "pyside6>=6.11.2",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

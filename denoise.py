@@ -13,6 +13,7 @@ import argparse
 from pathlib import Path
 
 from cutout import DEFAULT_TOLERANCE, cutout, merge_alpha
+from metadata import PNG_XMP_KEY
 
 import cv2
 import numpy as np
@@ -61,16 +62,26 @@ def load_image(src):
 
 
 def save_png(out, alpha, meta, dst, strip_meta=False):
-    """処理結果をPNGで保存する。meta は load_image が返したメタデータ"""
+    """処理結果をPNGで保存する。meta は load_image が返したメタデータ
+    色の情報（ICCプロファイル）は見た目に関わるので、strip_meta でも残す
+    """
     if alpha is not None:
         out = np.dstack([out, alpha])
     info = PngImagePlugin.PngInfo()
+    extra = {}
+    if meta.get('icc_profile'):
+        extra['icc_profile'] = meta['icc_profile']
     if not strip_meta:
         for k, v in meta.items():
             if isinstance(v, str):
                 info.add_text(k, v)
+        if meta.get('exif'):
+            extra['exif'] = meta['exif']
+        xmp = meta.get('xmp')   # JPEG / WebP の XMP。PNG の XMP はテキストとして上で引き継がれる
+        if isinstance(xmp, bytes) and PNG_XMP_KEY not in meta:
+            info.add_itxt(PNG_XMP_KEY, xmp.decode('utf-8', 'replace'))
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(out).save(dst, pnginfo=info)
+    Image.fromarray(out).save(dst, pnginfo=info, **extra)
 
 
 def process_file(src, dst, mode, lam, strip_meta, dark=DEFAULT_DARK, grad_th=DEFAULT_GRAD,

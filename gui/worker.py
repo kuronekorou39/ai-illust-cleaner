@@ -46,6 +46,7 @@ class Source:
     rgb: np.ndarray
     alpha: np.ndarray | None
     meta: dict
+    metadata: object = None   # metadata.Metadata（種類ごとの項目と生成情報）
     display: np.ndarray = None
     id: int = field(default_factory=lambda: next(_source_ids))
 

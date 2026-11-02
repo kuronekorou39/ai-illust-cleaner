@@ -1,13 +1,14 @@
-"""メタデータ表示・フォルダ一括処理のダイアログ"""
+"""メタデータの表示・消去、フォルダ一括処理のダイアログ"""
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
-from PySide6.QtWidgets import (QDialog, QFileDialog, QGridLayout, QHBoxLayout, QLineEdit,
-                               QPlainTextEdit, QProgressBar, QVBoxLayout)
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFileDialog, QGridLayout, QHBoxLayout,
+                               QLineEdit, QPlainTextEdit, QProgressBar, QVBoxLayout)
 
+import metadata as md
 from cutout import cutout, merge_alpha
 from denoise import clean, load_image, save_png
-from .widgets import button, label
+from .widgets import Segmented, button, label
 from .winchrome import apply_dark_titlebar
 
 BATCH_PATTERN = '*.png'
@@ -29,25 +30,123 @@ class _Dialog(QDialog):
         super().showEvent(e)
 
 
+def _gen_text(gen):
+    parts = [f'ツール：{gen.tool}']
+    if gen.prompt:
+        parts.append(f'■ プロンプト\n{gen.prompt}')
+    if gen.negative:
+        parts.append(f'■ ネガティブプロンプト\n{gen.negative}')
+    if gen.settings:
+        parts.append('■ 設定\n' + '\n'.join(f'{k}：{v}' for k, v in gen.settings.items()))
+    return '\n\n'.join(parts)
+
+
+def _clip(text):
+    return text if len(text) <= md.PREVIEW_CHARS else text[:md.PREVIEW_CHARS] + f'…（全 {len(text):,} 文字）'
+
+
+def _all_text(meta):
+    parts = []
+    for g, entries in meta.groups().items():
+        lines = []
+        for e in entries:
+            fields = md.xmp_fields(e.value) if g == 'xmp' else []
+            if fields:
+                lines += [f'{k}：{v}' for k, v in fields]
+            else:
+                lines.append(f'{e.key}：{_clip(e.value)}')
+        parts.append(f'■ {md.GROUPS[g][0]}\n' + '\n'.join(lines))
+    return '\n\n'.join(parts)
+
+
 class MetaDialog(_Dialog):
-    """PNGメタデータの内容を表示する"""
+    """メタデータの内容を、生成情報（プロンプトと設定に分けたもの）とすべての項目で表示する"""
 
     def __init__(self, parent, meta):
-        super().__init__(parent, 'PNGメタデータ', 560)
-        texts = {k: v for k, v in meta.items() if isinstance(v, str)}
-        view = QPlainTextEdit()
-        view.setReadOnly(True)
-        view.setMinimumHeight(260)
-        view.setPlainText('\n\n'.join(f'{k}:\n{v}' for k, v in texts.items())
-                          or 'この画像にはテキストのメタデータがありません。')
+        super().__init__(parent, 'メタデータ', 640)
+        self._meta = meta
+        tabs = [('all', 'すべての項目')]
+        if meta.gen is not None:
+            tabs.insert(0, ('gen', '生成情報'))
+        self.tabs = Segmented(tabs)
+        self.tabs.setFixedWidth(120 * len(tabs))
+        self.view = QPlainTextEdit()
+        self.view.setReadOnly(True)
+        self.view.setMinimumHeight(360)
+        self.tabs.changed.connect(self._show)
+        self.copy = button('プロンプトをコピー', 'secondary')
+        self.copy.clicked.connect(self._copy_prompt)
+        self.copy.setVisible(meta.gen is not None and bool(meta.gen.prompt))
         close = button('閉じる', 'secondary')
         close.clicked.connect(self.accept)
         foot = QHBoxLayout()
+        foot.addWidget(self.copy)
         foot.addStretch(1)
         foot.addWidget(close)
-        self.body.addWidget(label('生成パラメータなど、画像に埋め込まれた情報', 'muted'))
-        self.body.addWidget(view)
+        self.body.addWidget(self.tabs)
+        self.body.addWidget(self.view)
         self.body.addLayout(foot)
+        self._show(tabs[0][0])
+
+    def _show(self, tab):
+        if tab == 'gen':
+            self.view.setPlainText(_gen_text(self._meta.gen))
+        else:
+            self.view.setPlainText(_all_text(self._meta) or 'この画像にはメタデータがありません。')
+
+    def _copy_prompt(self):
+        QApplication.clipboard().setText(self._meta.gen.prompt)
+        self.copy.setText('コピーしました')
+
+
+class StripDialog(_Dialog):
+    """消すメタデータの種類を選ぶ"""
+
+    def __init__(self, parent, meta):
+        super().__init__(parent, 'メタデータを消して保存', 480)
+        groups = meta.groups()
+        self.boxes = {}
+        for g, entries in groups.items():
+            name, desc = md.GROUPS[g]
+            box = QCheckBox(f'{name}（{len(entries)} 項目）')
+            box.setChecked(True)
+            box.setEnabled(meta.strippable)
+            box.setCursor(Qt.PointingHandCursor)
+            box.toggled.connect(self._sync)
+            note = label(desc, 'small')
+            note.setWordWrap(True)
+            note.setContentsMargins(26, 0, 0, 0)   # チェックボックスの文字の位置にそろえる
+            item = QVBoxLayout()
+            item.setSpacing(2)
+            item.addWidget(box)
+            item.addWidget(note)
+            self.body.addLayout(item)
+            self.boxes[g] = box
+        if meta.strippable:
+            text = '画素はそのままで、ファイルから選んだ部分だけを取り除きます。形式も変わりません。'
+            if meta.has_color:
+                text += '\n色の情報（ICCプロファイルなど）は、見た目が変わるため残します。'
+        else:
+            text = (f'{meta.format or "この"}形式は部分的に消せないため、PNG として保存し直します。'
+                    'メタデータはすべて消えます（色の情報は残します）。')
+        info = label(text, 'muted')
+        info.setWordWrap(True)
+        self.ok = button('保存先を選ぶ', 'primary')
+        self.ok.clicked.connect(self.accept)
+        cancel = button('キャンセル', 'secondary')
+        cancel.clicked.connect(self.reject)
+        foot = QHBoxLayout()
+        foot.addStretch(1)
+        foot.addWidget(cancel)
+        foot.addWidget(self.ok)
+        self.body.addWidget(info)
+        self.body.addLayout(foot)
+
+    def selected(self):
+        return {g for g, box in self.boxes.items() if box.isChecked()}
+
+    def _sync(self):
+        self.ok.setEnabled(bool(self.selected()))
 
 
 class BatchThread(QThread):

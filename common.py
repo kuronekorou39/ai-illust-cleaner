@@ -4,9 +4,6 @@ from PIL import Image
 
 import noise
 
-# AI生成ツールが書き込むPNGメタデータのキー（A1111の parameters、ComfyUIの prompt/workflow 等）
-AI_META_KEYS = ('parameters', 'prompt', 'workflow', 'Comment', 'Software')
-
 _CANDIDATES = ['Yu Gothic', 'Meiryo', 'Hiragino Sans', 'Noto Sans CJK JP']
 
 

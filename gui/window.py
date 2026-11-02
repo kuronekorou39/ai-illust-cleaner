@@ -6,9 +6,10 @@ from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFileDialog, QFrame, QHBoxLayout, QMainWindow,
                                QMessageBox, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 
+import metadata as md
 from denoise import load_image, save_png
 from . import icons, theme
-from .dialogs import BATCH_SUFFIX, BatchDialog, MetaDialog
+from .dialogs import BATCH_SUFFIX, BatchDialog, MetaDialog, StripDialog
 from .imaging import composite_on_checker, mask_to_qimage, to_qimage
 from .inspect import InspectPanel
 from .panel import Panel
@@ -233,7 +234,11 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, APP_NAME, f'画像を開けませんでした。\n{path}\n\n{e}')
             return None
-        return Source(str(path), rgb, alpha, meta)
+        try:
+            info = md.read(path)
+        except Exception:   # メタデータが壊れていても、画像は開けるようにする
+            info = md.Metadata()
+        return Source(str(path), rgb, alpha, meta, info)
 
     def open_image(self, path):
         src = self._load(path)
@@ -385,8 +390,26 @@ class MainWindow(QMainWindow):
                       self.result['alpha'])
 
     def save_without_meta(self):
-        """画素はそのまま、メタデータだけを除いて保存する"""
-        self._save_as(self.source.rgb, NO_META_SUFFIX, 'メタデータを消して保存', True, self.source.alpha)
+        """画素はそのまま、選んだ種類のメタデータだけを除いて保存する"""
+        info = self.source.metadata
+        dlg = StripDialog(self, info)
+        if not dlg.exec():
+            return
+        if not info.strippable:   # 部分的に消せない形式は、PNG として保存し直す
+            self._save_as(self.source.rgb, NO_META_SUFFIX, 'メタデータを消して保存', True, self.source.alpha)
+            return
+        src = Path(self.source.path)
+        default = src.with_name(f'{src.stem}{NO_META_SUFFIX}{src.suffix}')
+        path, _ = QFileDialog.getSaveFileName(self, 'メタデータを消して保存', str(default),
+                                              f'{info.format} (*{src.suffix})')
+        if not path:
+            return
+        try:
+            md.strip_file(src, path, dlg.selected())
+        except Exception as e:
+            QMessageBox.warning(self, APP_NAME, f'保存できませんでした。\n{path}\n\n{e}')
+            return
+        self._say(f'保存しました：{Path(path).name}')
 
     def _save_as(self, rgb, suffix, title, strip_meta, alpha):
         src = Path(self.source.path)
@@ -405,7 +428,7 @@ class MainWindow(QMainWindow):
         BatchDialog(self, self.panel.params(), not self.keep_meta, folder).exec()
 
     def open_meta(self):
-        MetaDialog(self, self.source.meta).exec()
+        MetaDialog(self, self.source.metadata).exec()
 
     # ---- ドラッグ＆ドロップ ----
 

@@ -5,16 +5,19 @@ from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
 
+import metadata as md
 from . import score, theme
 from .widgets import StatTile, button, help_button, label
 
 META_PREVIEW_CHARS = 140
+META_SUMMARY_KEYS = ('シード値', 'モデル')   # 確認画面に出す生成設定
 NOISE_HELP = ('線を除いた塗りの部分にある、細かな色のばらつきです。\n'
               '「ノイズ平均」はばらつきの平均の大きさ、\n'
               '「1階調を超える画素」は目立つばらつきがある画素の割合で、\n'
               'どちらも小さいほどきれいです。')
-META_HELP = ('生成ツールが画像に書き込む、プロンプトなどの情報です。\n'
-             '残っていると、画像の内容に関係なく生成画像だとわかります。')
+META_HELP = ('画像ファイルに埋め込まれた、画素以外の情報です。\n\n'
+             + '\n'.join(f'・{name}：{desc}' for name, desc in md.GROUPS.values())
+             + '\n\n公開前に、意図しない情報が残っていないか確かめてください。')
 
 _NOISE_TEXT = {
     'extreme': 'ノイズが大きすぎます。このツールが対象とする塗り面ノイズの範囲を超えているため、'
@@ -99,7 +102,9 @@ class InspectPanel(QFrame):
         self.info = label('', 'monoMuted')
 
         # メタデータ
-        self.meta_state = ValueRow('生成パラメータ')
+        self.meta_rows = {g: ValueRow(name) for g, (name, _) in md.GROUPS.items()}
+        self.notes = label('', 'small')
+        self.notes.setWordWrap(True)
         self.meta_text = label('', 'metaBox')
         self.meta_text.setWordWrap(True)
         self.meta_text.setTextFormat(Qt.PlainText)
@@ -128,8 +133,8 @@ class InspectPanel(QFrame):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(_section(self.name, self.info, spacing=4))
-        lay.addWidget(_section(_titled('メタデータ', META_HELP), self.meta_state, self.meta_text,
-                               meta_row, self.strip, spacing=8))
+        lay.addWidget(_section(_titled('メタデータ', META_HELP), *self.meta_rows.values(), self.notes,
+                               self.meta_text, meta_row, self.strip, spacing=4))
         lay.addWidget(_section(_titled('塗り面ノイズ', NOISE_HELP), tiles, self.advice, last=True))
         lay.addStretch(1)
         foot = QVBoxLayout()
@@ -148,18 +153,37 @@ class InspectPanel(QFrame):
         alpha = '透過あり' if src.alpha is not None else '透過なし'
         self.info.setText(f'{w} × {h}　{path.suffix[1:].upper()}　{alpha}')
 
-        found = score.ai_meta(src.meta)
-        texts = {k: v for k, v in src.meta.items() if isinstance(v, str)}
-        self.meta_state.set_state('残っている' if found else '見つからない', bool(found))
-        if texts:
-            key, value = next(iter((found or texts).items()))
-            snippet = ' '.join(value.split())
-            more = '…' if len(snippet) > META_PREVIEW_CHARS else ''
-            self.meta_text.setText(f'{key}: {snippet[:META_PREVIEW_CHARS]}{more}')
-        self.meta_text.setVisible(bool(texts))
-        self.meta_view.setVisible(bool(texts))
-        self.strip.setVisible(bool(texts))
+        self._show_meta(src.metadata)
         self.set_analyzing()
+
+    def _show_meta(self, meta):
+        groups = meta.groups()
+        for g, row in self.meta_rows.items():
+            entries = groups.get(g, [])
+            if g == 'gen' and meta.gen is not None:
+                value = meta.gen.tool
+            elif g == 'c2pa' and entries:
+                value = 'あり'
+            else:
+                value = f'{len(entries)} 項目' if entries else 'なし'
+            row.set_state(value, bool(entries))
+        self.notes.setText('\n'.join(f'※ {n}' for n in meta.notes))
+        self.notes.setVisible(bool(meta.notes))
+
+        summary = ''
+        if meta.gen is not None:
+            prompt = ' '.join(meta.gen.prompt.split())
+            more = '…' if len(prompt) > META_PREVIEW_CHARS else ''
+            settings = '　'.join(f'{k} {meta.gen.settings[k]}' for k in META_SUMMARY_KEYS if k in meta.gen.settings)
+            summary = '\n'.join(t for t in (prompt[:META_PREVIEW_CHARS] + more, settings) if t)
+        elif meta.entries:
+            e = meta.entries[0]
+            value = ' '.join(e.value.split())
+            summary = f'{e.key}: {value[:META_PREVIEW_CHARS]}' + ('…' if len(value) > META_PREVIEW_CHARS else '')
+        self.meta_text.setText(summary)
+        self.meta_text.setVisible(bool(summary))
+        self.meta_view.setVisible(bool(groups))
+        self.strip.setVisible(bool(groups))
 
     def set_analyzing(self):
         """計測が終わるまでの表示"""
