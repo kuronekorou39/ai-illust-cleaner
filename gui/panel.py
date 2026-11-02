@@ -1,4 +1,4 @@
-"""右側の調整パネル（ノイズ除去・ノイズの見え方・背景の透過）"""
+"""右側の調整パネル。上は保存する画像に反映する「処理」、下は見え方だけを変える「表示」"""
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
@@ -14,6 +14,11 @@ LAM_PRESETS = (('弱', 0.001), ('標準', 0.002), ('強', 0.005))
 DARK_MAX = 255
 GRAD_MAX = 400
 TOLERANCE_MAX = 64
+LINE_HELP = ('ノイズ除去で線がぼやけないよう、線と判断した部分は処理せず元のまま残します。\n'
+             '次のどちらかに当てはまる画素を線とみなします。\n\n'
+             '・線とみなす暗さ：これより暗い画素（大きくすると、濃い塗りも線として残る）\n'
+             '・線とみなす輪郭の強さ：色の変わり方がこれより急な画素（小さくすると、細かな境目も残る）\n\n'
+             '「保護する線を色で表示」で、線とみなした範囲を確かめられます。')
 NOISE_HELP = ('ノイズの見え方を切り替えます。ノイズ除去の結果や数値には影響しません。\n'
               '数値は比べられるよう、常にメディアン差で計算しています。\n\n'
               '抽出：画像から何を引いてノイズとみなすか\n'
@@ -47,6 +52,30 @@ def _section(*widgets, spacing=12):
     return box
 
 
+def _titled(text, help_text):
+    """見出しと「？」ボタンを並べる"""
+    row = QHBoxLayout()
+    row.setSpacing(6)
+    row.addWidget(label(text, 'section'))
+    row.addWidget(help_button(help_text, f'{text}の説明'))
+    row.addStretch(1)
+    return row
+
+
+def _group(title, note):
+    """「処理」「表示」のまとまりの見出し"""
+    box = QFrame()
+    box.setObjectName('group')
+    lay = QHBoxLayout(box)
+    lay.setContentsMargins(20, 8, 20, 8)
+    lay.setSpacing(10)
+    lay.addWidget(label(title, 'groupTitle'))
+    sub = label(note, 'small')
+    sub.setWordWrap(True)   # パネルの幅を押し広げないようにする
+    lay.addWidget(sub, 1)
+    return box
+
+
 class Panel(QFrame):
     changed = Signal(bool)          # 引数は「操作の途中か」（スライダーをつかんでいる間は True）
     maskToggled = Signal(bool)
@@ -57,7 +86,7 @@ class Panel(QFrame):
         super().__init__()
         self.setObjectName('panel')
 
-        # 強さ
+        # ノイズ除去（方式 → 強さ。強さは「面を平坦化」にだけ効く）
         self.lam = SliderRow('強さ', 1, LAM_SLIDER_MAX, _lam_to_tick(DEFAULT_LAM),
                              fmt=lambda v: f'{v * LAM_STEP:.4f}', big_value=True)
         self.lam.changed.connect(self._on_lam)
@@ -73,21 +102,25 @@ class Panel(QFrame):
             presets.addWidget(b, 0, i)
         self._sync_presets()
 
-        # 方式
         self.mode = Segmented([('l0', '面を平坦化'), ('soft', '揺らぎだけ除去')])
         self.mode.changed.connect(self._on_mode)
-        mode_box = QVBoxLayout()
-        mode_box.setSpacing(10)
-        mode_box.addWidget(label('方式', 'section'))
-        mode_box.addWidget(self.mode)
+        self.lam_box = QWidget()
+        lam_lay = QVBoxLayout(self.lam_box)
+        lam_lay.setContentsMargins(0, 6, 0, 0)
+        lam_lay.setSpacing(12)
+        lam_lay.addWidget(self.lam)
+        lam_lay.addLayout(presets)
 
         # 線の保護
-        self.dark = SliderRow('暗部しきい値', 0, DARK_MAX, DEFAULT_DARK)
-        self.grad = SliderRow('勾配しきい値', 0, GRAD_MAX, DEFAULT_GRAD)
+        self.dark = SliderRow('線とみなす暗さ', 0, DARK_MAX, DEFAULT_DARK)
+        self.grad = SliderRow('線とみなす輪郭の強さ', 0, GRAD_MAX, DEFAULT_GRAD)
+        self.dark.setToolTip('これより暗い画素を線として残します。大きくすると、濃い塗りも線として残ります。')
+        self.grad.setToolTip('色の変わり方がこれより急な画素を線として残します。小さくすると、細かな境目も残ります。')
         for row in (self.dark, self.grad):
             row.changed.connect(lambda _, r=row: self.changed.emit(r.slider.isSliderDown()))
             row.released.connect(lambda: self.changed.emit(False))
-        self.show_mask = QCheckBox('線マスクを重ねて表示')
+        self.show_mask = QCheckBox('保護する線を色で表示')
+        self.show_mask.setToolTip('線とみなして処理しない範囲を、画像の上に色で重ねます。')
         self.show_mask.setCursor(Qt.PointingHandCursor)
         self.show_mask.toggled.connect(self.maskToggled)
 
@@ -152,14 +185,16 @@ class Panel(QFrame):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(_section(self.lam, presets))
-        lay.addWidget(_section(mode_box))
-        lay.addWidget(_section(label('線の保護', 'section'), self.dark, self.grad, self.show_mask))
-        lay.addWidget(_section(noise_head, label('抽出', 'small'), self.algo, self.compare,
-                               label('表示', 'small'), self.noise_style, spacing=8))
-        cut = _section(cutout_head, self.cutout, self.cutout_opts, spacing=10)
-        cut.setObjectName('')   # 最後の区切り線は不要
-        lay.addWidget(cut)
+        lay.addWidget(_group('処理', '保存する画像に反映'))
+        lay.addWidget(_section(label('ノイズ除去', 'section'), self.mode, self.lam_box))
+        lay.addWidget(_section(_titled('線の保護', LINE_HELP), self.dark, self.grad))
+        lay.addWidget(_section(cutout_head, self.cutout, self.cutout_opts, spacing=10))
+        lay.addWidget(_group('表示', '見え方だけ。保存する画像は変わらない'))
+        lay.addWidget(_section(self.show_mask))
+        noise_box = _section(noise_head, label('抽出', 'small'), self.algo, self.compare,
+                             label('表示', 'small'), self.noise_style, spacing=8)
+        noise_box.setObjectName('')   # 最後の区切り線は不要
+        lay.addWidget(noise_box)
         lay.addStretch(1)
 
     # ---- 値 ----
@@ -212,7 +247,5 @@ class Panel(QFrame):
             b.setChecked(self._presets.id(b) == self.lam.value())
 
     def _on_mode(self, mode):
-        self.lam.setEnabled(mode == 'l0')   # 強さは「面を平坦化」にだけ効く
-        for b in self._presets.buttons():
-            b.setEnabled(mode == 'l0')
+        self.lam_box.setVisible(mode == 'l0')   # 強さは「面を平坦化」にだけ効く
         self.changed.emit(False)

@@ -13,7 +13,7 @@ import argparse
 from pathlib import Path
 
 from cutout import DEFAULT_TOLERANCE, cutout, merge_alpha
-from metadata import PNG_XMP_KEY
+from metadata import PNG_XMP_KEY, strip
 
 import cv2
 import numpy as np
@@ -82,6 +82,13 @@ def save_png(out, alpha, meta, dst, strip_meta=False):
             info.add_itxt(PNG_XMP_KEY, xmp.decode('utf-8', 'replace'))
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(out).save(dst, pnginfo=info, **extra)
+
+
+def save_clean(out, alpha, meta, dst, remove=()):
+    """処理結果をPNGで保存し、remove（metadata.GROUPS のキー）の種類のメタデータを取り除く"""
+    save_png(out, alpha, meta, dst)
+    if remove:
+        Path(dst).write_bytes(strip(Path(dst).read_bytes(), set(remove)))
 
 
 def process_file(src, dst, mode, lam, strip_meta, dark=DEFAULT_DARK, grad_th=DEFAULT_GRAD,

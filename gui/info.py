@@ -93,7 +93,6 @@ def _titled(text, help_text, right=None):
 class InfoPanel(QFrame):
     openRequested = Signal()
     batchRequested = Signal()
-    stripSaveRequested = Signal()
     metaRequested = Signal()
 
     def __init__(self):
@@ -125,8 +124,6 @@ class InfoPanel(QFrame):
         self.meta_text.setTextFormat(Qt.PlainText)
         self.meta_view = button('内容をすべて見る', 'link')
         self.meta_view.clicked.connect(self.metaRequested)
-        self.strip = button('メタデータを消して保存')
-        self.strip.clicked.connect(self.stripSaveRequested)
         meta_row = QHBoxLayout()
         meta_row.addWidget(self.meta_view)
         meta_row.addStretch(1)
@@ -145,7 +142,7 @@ class InfoPanel(QFrame):
         legend = Legend([(theme.BAR_BEFORE, '処理前'), (theme.ACCENT, '処理後')])
 
         self.meta_box = _section(_titled('メタデータ', META_HELP), *self.meta_rows.values(), self.notes,
-                                 self.meta_text, meta_row, self.strip, spacing=4)
+                                 self.meta_text, meta_row, spacing=4)
         self.result_box = _section(_titled('塗り面ノイズ', NOISE_HELP, legend), self.noise_mean,
                                    self.noise_over, self.advice, tiles, spacing=12, last=True)
         lay = QVBoxLayout(self)
@@ -206,7 +203,6 @@ class InfoPanel(QFrame):
         self.meta_text.setText(summary)
         self.meta_text.setVisible(bool(summary))
         self.meta_view.setVisible(bool(groups))
-        self.strip.setVisible(bool(groups))
 
     def set_analysis(self, metrics, uniform_bg):
         """元画像の計測結果"""

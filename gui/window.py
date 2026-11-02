@@ -3,13 +3,13 @@ from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QHBoxLayout, QMainWindow, QMessageBox,
+from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QMainWindow, QMessageBox,
                                QScrollArea, QVBoxLayout, QWidget)
 
 import metadata as md
-from denoise import load_image, save_png
+from denoise import load_image, save_clean, save_png
 from . import icons, theme
-from .dialogs import BATCH_SUFFIX, BatchDialog, MetaDialog, StripDialog
+from .dialogs import BATCH_SUFFIX, BatchDialog, MetaDialog, SaveDialog
 from .imaging import composite_on_checker, mask_to_qimage, to_qimage
 from .info import InfoPanel
 from .panel import Panel
@@ -20,7 +20,7 @@ from .worker import (FullProcessor, LatestWorker, PreviewProcessor, Source, anal
                      clamp_preview_rect, render_algos, render_noise)
 
 APP_NAME = 'ai-illust-cleaner'
-NO_META_SUFFIX = '_nometa'   # メタデータだけ消して保存するときの既定のファイル名の末尾
+NO_META_SUFFIX = '_nometa'   # 元の画像のまま、メタデータだけ消して保存するときの既定のファイル名の末尾
 IMAGE_SUFFIXES = ('.png', '.jpg', '.jpeg', '.jfif', '.jpe', '.webp', '.bmp', '.gif', '.tif', '.tiff')
 OPEN_FILTER = ('画像 (' + ' '.join(f'*{s}' for s in IMAGE_SUFFIXES) + ');;すべてのファイル (*)')
 FULL_DEBOUNCE_MS = 250    # スライダー操作が止まってから全体処理を始めるまでの待ち
@@ -52,6 +52,7 @@ class MainWindow(QMainWindow):
         self.source = None
         self.result = None          # 最後に表示した全体処理の結果
         self._algos_key = None      # 4通りの比較で表示中のノイズの (画像, 表示方式)
+        self._save_choice = (True, None)   # 前回の保存の設定 (処理を反映するか, 消す種類)。None はすべて
         self._awaiting = False      # 現在の設定での全体処理の結果を待っているか
         self._analyzing = 0         # 実行中の指標計算の数
         self._toggles = ()          # 透過をクリックで反転させた位置（画像ごと）
@@ -85,7 +86,6 @@ class MainWindow(QMainWindow):
         self.panel.compareAlgos.connect(self._on_compare_algos)
         self.viewer.algoPicked.connect(self._on_algo_picked)
         self.info_panel.metaRequested.connect(self.open_meta)
-        self.info_panel.stripSaveRequested.connect(self.save_without_meta)
         self.info_panel.openRequested.connect(self.choose_image)
         self.info_panel.batchRequested.connect(lambda: self.open_batch())
         self.viewer.zoomChanged.connect(lambda z: self.zoom_label.setText(f'{z * 100:.0f}%'))
@@ -109,9 +109,6 @@ class MainWindow(QMainWindow):
         self.coords.setFixedWidth(120)
         self.info = label('', 'monoMuted')
         self.status = label('', 'muted')
-        self.keep_meta_box = QCheckBox('メタデータを引き継ぐ')
-        self.keep_meta_box.setChecked(True)
-        self.keep_meta_box.setCursor(Qt.PointingHandCursor)
         self.save_btn = button('保存', 'primary')
         self.zoom_out_btn.clicked.connect(self.viewer.zoom_out)
         self.zoom_in_btn.clicked.connect(self.viewer.zoom_in)
@@ -127,8 +124,6 @@ class MainWindow(QMainWindow):
         bl.addWidget(self.info)
         bl.addStretch(1)
         bl.addWidget(self.status)
-        bl.addSpacing(8)
-        bl.addWidget(self.keep_meta_box)
         bl.addSpacing(8)
         bl.addWidget(self.save_btn)
 
@@ -167,13 +162,8 @@ class MainWindow(QMainWindow):
         for w in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn, self.panel):
             w.setEnabled(has)
         self.save_btn.setVisible(has)
-        self.keep_meta_box.setVisible(has)
-        self.save_btn.setEnabled(has and self.result is not None and not self._awaiting)
+        self.save_btn.setEnabled(has)
         self.viewer.set_busy(self._awaiting or self._analyzing > 0)
-
-    @property
-    def keep_meta(self):
-        return self.keep_meta_box.isChecked()
 
     def _say(self, text):
         self.status.setText(text)
@@ -376,46 +366,37 @@ class MainWindow(QMainWindow):
     # ---- 保存・一括処理・メタデータ ----
 
     def save(self):
-        self._save_as(self.result['result'], BATCH_SUFFIX, '処理後の画像を保存', not self.keep_meta,
-                      self.result['alpha'])
-
-    def save_without_meta(self):
-        """画素はそのまま、選んだ種類のメタデータだけを除いて保存する"""
+        """処理を反映するか、どの種類のメタデータを消すかを選んで保存する"""
         info = self.source.metadata
-        dlg = StripDialog(self, info)
+        ready = self.result is not None and not self._awaiting
+        apply, remove = self._save_choice
+        dlg = SaveDialog(self, info, ready, apply, remove)
         if not dlg.exec():
             return
-        if not info.strippable:   # 部分的に消せない形式は、PNG として保存し直す
-            self._save_as(self.source.rgb, NO_META_SUFFIX, 'メタデータを消して保存', True, self.source.alpha)
-            return
+        apply, remove = dlg.apply_processing(), dlg.selected()
+        self._save_choice = (apply, remove)
         src = Path(self.source.path)
-        default = src.with_name(f'{src.stem}{NO_META_SUFFIX}{src.suffix}')
-        path, _ = QFileDialog.getSaveFileName(self, 'メタデータを消して保存', str(default),
-                                              f'{info.format} (*{src.suffix})')
+        keep_format = not apply and info.strippable
+        suffix = BATCH_SUFFIX if apply else NO_META_SUFFIX
+        ext = src.suffix if keep_format else '.png'
+        path, _ = QFileDialog.getSaveFileName(self, '保存', str(src.with_name(f'{src.stem}{suffix}{ext}')),
+                                              f'{info.format if keep_format else "PNG"} (*{ext})')
         if not path:
             return
         try:
-            md.strip_file(src, path, dlg.selected())
-        except Exception as e:
-            QMessageBox.warning(self, APP_NAME, f'保存できませんでした。\n{path}\n\n{e}')
-            return
-        self._say(f'保存しました：{Path(path).name}')
-
-    def _save_as(self, rgb, suffix, title, strip_meta, alpha):
-        src = Path(self.source.path)
-        default = src.with_name(f'{src.stem}{suffix}.png')
-        path, _ = QFileDialog.getSaveFileName(self, title, str(default), 'PNG (*.png)')
-        if not path:
-            return
-        try:
-            save_png(rgb, alpha, self.source.meta, path, strip_meta)
+            if apply:
+                save_clean(self.result['result'], self.result['alpha'], self.source.meta, path, remove)
+            elif keep_format:   # 画素には触れず、ファイルから選んだ部分だけを取り除く
+                md.strip_file(src, path, remove)
+            else:               # 部分的に消せない形式は、PNG として保存し直す
+                save_png(self.source.rgb, self.source.alpha, self.source.meta, path, strip_meta=True)
         except Exception as e:
             QMessageBox.warning(self, APP_NAME, f'保存できませんでした。\n{path}\n\n{e}')
             return
         self._say(f'保存しました：{Path(path).name}')
 
     def open_batch(self, folder=None):
-        BatchDialog(self, self.panel.params(), not self.keep_meta, folder).exec()
+        BatchDialog(self, self.panel.params(), folder).exec()
 
     def open_meta(self):
         MetaDialog(self, self.source.metadata).exec()

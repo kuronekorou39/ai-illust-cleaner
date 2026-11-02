@@ -43,12 +43,14 @@ QToolTip { background: @SURFACE; color: @TEXT; border: 1px solid @BORDER_STRONG;
 #panel { background: @PANEL; border-left: 1px solid @BORDER; }
 #panel[side="left"] { border-left: none; border-right: 1px solid @BORDER; }
 #section { border-bottom: 1px solid @BORDER; }
+#group { background: @BG; border-bottom: 1px solid @BORDER; }
 #panelScroll { background: @PANEL; border: none; }
 
 QLabel { background: transparent; }
 QLabel[role="section"] { font-size: 12px; font-weight: 700; color: @MUTED; letter-spacing: 1px; }
 QLabel[role="muted"] { color: @MUTED; }
 QLabel[role="small"] { color: @MUTED; font-size: 11px; }
+QLabel[role="groupTitle"] { font-size: 12px; font-weight: 700; color: @TEXT; }
 QLabel[role="mono"] { font-family: '@FONT_MONO'; }
 QLabel[role="monoMuted"] { font-family: '@FONT_MONO'; font-size: 12px; color: @MUTED; }
 QLabel[role="bigValue"] { font-family: '@FONT_MONO'; font-size: 22px; }
@@ -100,6 +102,12 @@ QCheckBox { color: @MUTED; spacing: 8px; }
 QCheckBox:hover { color: @TEXT; }
 QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid @BORDER_STRONG; border-radius: 4px; background: @BG; }
 QCheckBox::indicator:checked { background: @ACCENT; border-color: @ACCENT; image: url(@CHECK); }
+QRadioButton { color: @MUTED; spacing: 8px; }
+QRadioButton:hover, QRadioButton:checked { color: @TEXT; }
+QRadioButton:disabled { color: @DISABLED; }
+QRadioButton::indicator { width: 14px; height: 14px; border: 1px solid @MUTED; border-radius: 8px; background: @BG; }
+QRadioButton::indicator:checked { border: 4px solid @ACCENT; width: 8px; height: 8px; background: @TEXT; }
+QRadioButton::indicator:disabled { border-color: @BORDER_STRONG; }
 
 #tile { background: @BG; border-radius: 8px; }
 

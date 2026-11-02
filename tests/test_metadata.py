@@ -211,3 +211,17 @@ def test_save_png_carries_jpeg_metadata(tmp_path, strip_meta):
     else:
         assert meta.gen.prompt == '1girl, solo, smile'
         assert {'gen', 'exif', 'xmp'} <= set(meta.groups())
+
+
+def test_save_clean_removes_selected_groups(tmp_path):
+    """処理後の保存で、選んだ種類だけを消す（保存ダイアログの「反映する」）"""
+    from denoise import load_image, save_clean
+    src = tmp_path / 'src.png'
+    src.write_bytes(_full_png())
+    info, rgb, alpha = load_image(src)
+    dst = tmp_path / 'out.png'
+    save_clean(rgb, alpha, info, dst, {'gen', 'xmp'})
+    meta = md.read(dst)
+    assert meta.gen is None
+    assert set(meta.groups()) == {'exif', 'other'}   # C2PA は処理後の画像には引き継がない
+    assert np.array_equal(_decode(dst.read_bytes()), rgb)

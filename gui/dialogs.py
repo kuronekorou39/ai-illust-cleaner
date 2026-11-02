@@ -2,8 +2,9 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFileDialog, QGridLayout, QHBoxLayout,
-                               QLineEdit, QPlainTextEdit, QProgressBar, QVBoxLayout)
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDialog, QFileDialog, QGridLayout,
+                               QHBoxLayout, QLineEdit, QPlainTextEdit, QProgressBar, QRadioButton,
+                               QVBoxLayout)
 
 import metadata as md
 from cutout import cutout, merge_alpha
@@ -99,20 +100,34 @@ class MetaDialog(_Dialog):
         self.copy.setText('コピーしました')
 
 
-class StripDialog(_Dialog):
-    """消すメタデータの種類を選ぶ"""
+class SaveDialog(_Dialog):
+    """保存の設定：処理を反映するか、どの種類のメタデータを消すか"""
 
-    def __init__(self, parent, meta):
-        super().__init__(parent, 'メタデータを消して保存', 480)
-        groups = meta.groups()
+    def __init__(self, parent, meta, processed_ready, apply=True, remove=None):
+        super().__init__(parent, '保存', 500)
+        self._meta = meta
+
+        self.apply = QRadioButton('ノイズ除去と背景の透過を反映する（PNG で保存）')
+        self.original = QRadioButton(f'元の画像のまま（{meta.format or "元の"}形式のまま、画素も変えない）')
+        group = QButtonGroup(self)
+        for b in (self.apply, self.original):
+            b.setCursor(Qt.PointingHandCursor)
+            group.addButton(b)
+        self.apply.setEnabled(processed_ready)
+        (self.apply if apply and processed_ready else self.original).setChecked(True)
+        self.body.addWidget(label('画像', 'section'))
+        self.body.addWidget(self.apply)
+        self.body.addWidget(self.original)
+
+        self.body.addSpacing(6)
+        self.body.addWidget(label('消すメタデータ', 'section'))
         self.boxes = {}
+        groups = meta.groups()
         for g, entries in groups.items():
             name, desc = md.GROUPS[g]
             box = QCheckBox(f'{name}（{len(entries)} 項目）')
-            box.setChecked(True)
-            box.setEnabled(meta.strippable)
+            box.setChecked(remove is None or g in remove)
             box.setCursor(Qt.PointingHandCursor)
-            box.toggled.connect(self._sync)
             note = label(desc, 'small')
             note.setWordWrap(True)
             note.setContentsMargins(26, 0, 0, 0)   # チェックボックスの文字の位置にそろえる
@@ -122,32 +137,45 @@ class StripDialog(_Dialog):
             item.addWidget(note)
             self.body.addLayout(item)
             self.boxes[g] = box
-        if meta.strippable:
-            text = '画素はそのままで、ファイルから選んだ部分だけを取り除きます。形式も変わりません。'
-            if meta.has_color:
-                text += '\n色の情報（ICCプロファイルなど）は、見た目が変わるため残します。'
-        else:
-            text = (f'{meta.format or "この"}形式は部分的に消せないため、PNG として保存し直します。'
-                    'メタデータはすべて消えます（色の情報は残します）。')
-        info = label(text, 'muted')
-        info.setWordWrap(True)
-        self.ok = button('保存先を選ぶ', 'primary')
-        self.ok.clicked.connect(self.accept)
+        if not groups:
+            self.body.addWidget(label('この画像にはメタデータがありません。', 'muted'))
+        self.note = label('', 'small')
+        self.note.setWordWrap(True)
+        self.body.addWidget(self.note)
+
+        ok = button('保存先を選ぶ', 'primary')
+        ok.clicked.connect(self.accept)
         cancel = button('キャンセル', 'secondary')
         cancel.clicked.connect(self.reject)
         foot = QHBoxLayout()
         foot.addStretch(1)
         foot.addWidget(cancel)
-        foot.addWidget(self.ok)
-        self.body.addWidget(info)
+        foot.addWidget(ok)
         self.body.addLayout(foot)
+        for b in (self.apply, self.original):   # チェックボックスを作ってからつなぐ
+            b.toggled.connect(self._sync)
+        self._sync()
+
+    def apply_processing(self):
+        return self.apply.isChecked()
 
     def selected(self):
         return {g for g, box in self.boxes.items() if box.isChecked()}
 
-    def _sync(self):
-        self.ok.setEnabled(bool(self.selected()))
-
+    def _sync(self, _=None):
+        partial = self.apply_processing() or self._meta.strippable
+        for box in self.boxes.values():   # 部分的に消せない形式を元のまま保存するときは、すべて消える
+            box.setEnabled(partial)
+            if not partial:
+                box.setChecked(True)
+        if partial:
+            text = '色の情報（ICCプロファイルなど）は、見た目が変わるため残します。'
+        else:
+            text = (f'{self._meta.format}形式は部分的に消せないため、PNG として保存し直し、'
+                    'メタデータはすべて消します（色の情報は残します）。')
+        if self.apply_processing() and 'c2pa' in self._meta.groups():
+            text += '\nC2PA は署名が処理後の画像と合わなくなるため、反映するときは引き継ぎません。'
+        self.note.setText(text)
 
 class BatchThread(QThread):
     progress = Signal(int, str)       # 完了した枚数、処理したファイル名
@@ -182,9 +210,9 @@ class BatchThread(QThread):
 class BatchDialog(_Dialog):
     """フォルダ内のPNGを、現在の設定でまとめて処理する"""
 
-    def __init__(self, parent, params, strip_meta, folder=None):
+    def __init__(self, parent, params, folder=None):
         super().__init__(parent, 'フォルダを一括処理', 560)
-        self._params, self._strip_meta = params, strip_meta
+        self._params = params
         self._thread = None
 
         self.src = QLineEdit()
@@ -208,8 +236,7 @@ class BatchDialog(_Dialog):
         strength = f'　強さ {params.lam:.4f}' if params.mode == 'l0' else ''
         tolerance = '自動' if params.tolerance is None else str(params.tolerance)
         cutout = f'　背景を透明化（許容差 {tolerance}）' if params.cutout else ''
-        meta = 'メタデータは引き継がない' if strip_meta else 'メタデータを引き継ぐ'
-        summary = label(f'{mode}{strength}　暗部 {params.dark}　勾配 {params.grad}{cutout}　{meta}', 'muted')
+        summary = label(f'{mode}{strength}　線の暗さ {params.dark}　線の輪郭 {params.grad}{cutout}', 'muted')
         summary.setWordWrap(True)
 
         self.status = label('', 'muted')
@@ -228,6 +255,10 @@ class BatchDialog(_Dialog):
 
         self.body.addLayout(grid)
         self.body.addWidget(summary)
+        self.strip_meta = QCheckBox('メタデータをすべて消す（色の情報は残す）')
+        self.strip_meta.setChecked(True)
+        self.strip_meta.setCursor(Qt.PointingHandCursor)
+        self.body.addWidget(self.strip_meta)
         self.body.addWidget(self.bar)
         self.body.addWidget(self.status)
         self.body.addLayout(foot)
@@ -265,7 +296,7 @@ class BatchDialog(_Dialog):
         self.bar.setValue(0)
         self.run.setText('中止')
         self.close_btn.setEnabled(False)
-        self._thread = BatchThread(files, Path(self.dst.text()), self._params, self._strip_meta, self)
+        self._thread = BatchThread(files, Path(self.dst.text()), self._params, self.strip_meta.isChecked(), self)
         self._thread.progress.connect(self._on_progress)
         self._thread.finished_all.connect(self._on_finished)
         self._thread.start()
