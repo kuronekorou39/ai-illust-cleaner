@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QWidget
 
 import noise
 from . import icons, theme
-from .widgets import Segmented
+from .widgets import Segmented, ZoomBar
 
 ZOOM_STEP = 1.25
 ZOOM_MIN, ZOOM_MAX = 0.05, 32.0
@@ -77,6 +77,10 @@ class Viewer(QWidget):
             seg.setParent(self)
             seg.setFixedSize(width, 40)
             seg.setCursor(Qt.ArrowCursor)
+        self.zoom_bar = ZoomBar(self)
+        self.zoom_bar.setParent(self)
+        self.zoom_bar.setFixedHeight(40)
+        self.zoom_bar.setCursor(Qt.ArrowCursor)
         self.mode_seg.set_value(self.compare_mode)
         self.mode_seg.changed.connect(self.set_mode)
         self.view_seg.changed.connect(self.set_view)
@@ -170,11 +174,13 @@ class Viewer(QWidget):
     def _sync_overlays(self):
         self.mode_seg.setVisible(self.has_image() and self.mode != 'algos')
         self.view_seg.setVisible(self.has_image() and self.mode == 'slide')
+        self.zoom_bar.adjustSize()
+        self.zoom_bar.setVisible(self.has_image())
         self._place_overlays()
 
     def _place_overlays(self):
         """上部中央に横一列で並べる。入りきらなければ2段にする"""
-        widgets = [w for w in (self.mode_seg, self.view_seg) if w.isVisibleTo(self)]
+        widgets = [w for w in (self.mode_seg, self.view_seg, self.zoom_bar) if w.isVisibleTo(self)]
         span = lambda ws: sum(w.width() for w in ws) + OVERLAY_GAP * max(0, len(ws) - 1)
         rows = [widgets] if span(widgets) <= self.width() - 2 * OVERLAY_MARGIN else [[w] for w in widgets]
         y = OVERLAY_TOP

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
 
 import metadata as md
 from . import icons, score, theme
-from .widgets import ClickableLabel, Legend, MetricBars, StatTile, button, help_button, label
+from .widgets import ClickableLabel, Legend, MetricBars, StatTile, button, help_button, label, warn_button
 
 META_PREVIEW_CHARS = 140
 META_SUMMARY_KEYS = ('シード値', 'モデル')   # 左パネルに出す生成設定
@@ -20,13 +20,8 @@ META_HELP = ('画像ファイルに埋め込まれた、画素以外の情報で
              + '\n'.join(f'・{name}：{desc}' for name, desc in md.GROUPS.values())
              + '\n\n公開前に、意図しない情報が残っていないか確かめてください。')
 
-_NOISE_TEXT = {
-    'extreme': 'ノイズが大きすぎます。このツールが対象とする塗り面ノイズの範囲を超えているため、'
-               '除去しても残ります。一般的なノイズ除去（NLM など）のほうが向いています。',
-    'high': 'ノイズが多めです。除去の効果が見込めます。',
-    'mid': 'ノイズがやや見られます。',
-    'low': 'ノイズは少なく、処理は不要そうです。',
-}
+EXTREME_NOISE_TEXT = ('ノイズが大きすぎます。このツールが対象とする塗り面ノイズ（±1階調程度）の範囲を超えているため、\n'
+                      '除去しても残ります。一般的なノイズ除去（NLM など）のほうが向いています。')
 
 
 class ValueRow(QWidget):
@@ -78,12 +73,14 @@ def _section(*items, spacing=10, last=False):
     return box
 
 
-def _titled(text, help_text, right=None):
+def _titled(text, help_text, right=None, extra=None):
     """見出しと「？」ボタンを並べる"""
     row = QHBoxLayout()
     row.setSpacing(6)
     row.addWidget(label(text, 'section'))
     row.addWidget(help_button(help_text, f'{text}の説明'))
+    if extra is not None:
+        row.addWidget(extra)
     row.addStretch(1)
     if right is not None:
         row.addWidget(right)
@@ -97,8 +94,7 @@ class InfoPanel(QFrame):
 
     def __init__(self):
         super().__init__()
-        self.setObjectName('panel')
-        self.setProperty('side', 'left')
+        self.setObjectName('panelBody')
 
         # ファイル
         self.open_btn = button('開く')
@@ -127,8 +123,9 @@ class InfoPanel(QFrame):
         # 結果（塗り面ノイズの処理前後と、元の絵の保たれ具合）
         self.noise_mean = MetricBars('塗り面ノイズ平均', lambda v: f'{v:.3f}')
         self.noise_over = MetricBars('1階調を超える画素', lambda v: f'{v:.2f}%')
-        self.advice = label('', 'muted')
-        self.advice.setWordWrap(True)
+        self.noise_warn = warn_button('ノイズについての注意')
+        self.noise_warn.setToolTip(EXTREME_NOISE_TEXT)
+        self.noise_warn.hide()
         self.ssim = StatTile('SSIM')
         self.psnr = StatTile('PSNR')
         tiles = QHBoxLayout()
@@ -139,8 +136,8 @@ class InfoPanel(QFrame):
 
         self.meta_box = _section(_titled('メタデータ', META_HELP), *self.meta_rows.values(), self.notes,
                                  self.meta_text, spacing=4)
-        self.result_box = _section(_titled('塗り面ノイズ', NOISE_HELP, legend), self.noise_mean,
-                                   self.noise_over, self.advice, tiles, spacing=12, last=True)
+        self.result_box = _section(_titled('塗り面ノイズ', NOISE_HELP, legend, self.noise_warn), self.noise_mean,
+                                   self.noise_over, tiles, spacing=12, last=True)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -169,7 +166,7 @@ class InfoPanel(QFrame):
         self._show_meta(src.metadata)
         for kind in ('before', 'after'):
             self.set_metrics(kind, None)
-        self.advice.setText('')
+        self.noise_warn.hide()
         self._sync_loaded(True)
 
     def _show_meta(self, meta):
@@ -202,7 +199,7 @@ class InfoPanel(QFrame):
     def set_analysis(self, metrics, uniform_bg):
         """元画像の計測結果"""
         self.info.setText(self.info.text() + ('　背景 単色' if uniform_bg else '　背景 複雑'))
-        self.advice.setText(_NOISE_TEXT[score.noise_level(metrics['mean'])])
+        self.noise_warn.setVisible(score.noise_level(metrics['mean']) == 'extreme')
         self.set_metrics('before', metrics)
 
     def set_metrics(self, kind, metrics):

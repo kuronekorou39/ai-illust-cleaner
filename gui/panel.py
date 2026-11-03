@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBo
 import noise
 from cutout import AUTO_MAX
 from denoise import DEFAULT_DARK, DEFAULT_GRAD, DEFAULT_LAM
-from .widgets import ChoiceGrid, Segmented, SliderRow, button, help_button, label
+from .widgets import Accordion, ChoiceGrid, Segmented, SliderRow, button, help_button, label
 from .worker import Params
 
 LAM_STEP = 0.0002            # 強さスライダーの1目盛り
@@ -62,16 +62,12 @@ def _titled(text, help_text):
     return row
 
 
-def _group(title, note):
+def _group(title):
     """「処理」「表示」のまとまりの見出し"""
     box = QWidget()
     lay = QHBoxLayout(box)
     lay.setContentsMargins(20, 20, 20, 0)
-    lay.setSpacing(10)
-    lay.addWidget(label(title, 'groupTitle'), 0, Qt.AlignBottom)
-    sub = label(note, 'small')
-    sub.setWordWrap(True)   # パネルの幅を押し広げないようにする
-    lay.addWidget(sub, 1, Qt.AlignBottom)
+    lay.addWidget(label(title, 'groupTitle'))
     return box
 
 
@@ -124,11 +120,6 @@ class Panel(QFrame):
         self.show_mask.toggled.connect(self.maskToggled)
 
         # ノイズの見え方
-        noise_head = QHBoxLayout()
-        noise_head.setSpacing(6)
-        noise_head.addWidget(label('ノイズの見え方', 'section'))
-        noise_head.addWidget(help_button(NOISE_HELP, 'ノイズの見え方の説明'))
-        noise_head.addStretch(1)
         self.algo = ChoiceGrid([(k, name, desc) for k, (name, desc) in noise.ALGOS.items()], 2)
         self.compare = button('4通りを並べて選ぶ', checkable=True)
         self.compare.setToolTip('画面を4分割し、それぞれの抽出方式で取り出したノイズを並べます。\n'
@@ -184,14 +175,20 @@ class Panel(QFrame):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(_group('処理', '保存する画像に反映'))
+        lay.addWidget(_group('処理'))
         lay.addWidget(_section(label('ノイズ除去', 'section'), self.mode, self.lam_box))
         lay.addWidget(_section(_titled('線の保護', LINE_HELP), self.dark, self.grad))
         lay.addWidget(_section(cutout_head, self.cutout, self.cutout_opts, spacing=10))
-        lay.addWidget(_group('表示', '見え方だけ。保存する画像は変わらない'))
+        lay.addWidget(_group('表示'))
         lay.addWidget(_section(self.show_mask))
-        noise_box = _section(noise_head, label('抽出', 'small'), self.algo, self.compare,
-                             label('表示', 'small'), self.noise_style, spacing=8)
+        noise_body = QWidget()
+        nb = QVBoxLayout(noise_body)
+        nb.setContentsMargins(0, 0, 0, 0)
+        nb.setSpacing(8)
+        for w in (label('抽出', 'small'), self.algo, self.compare, label('表示', 'small'), self.noise_style):
+            nb.addWidget(w)
+        self.noise_view = Accordion('ノイズの見え方', NOISE_HELP, noise_body)
+        noise_box = _section(self.noise_view)
         noise_box.setObjectName('')   # 最後の区切り線は不要
         lay.addWidget(noise_box)
         lay.addStretch(1)

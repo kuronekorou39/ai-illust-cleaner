@@ -14,7 +14,7 @@ from .imaging import composite_on_checker, mask_to_qimage, to_qimage
 from .info import InfoPanel
 from .panel import Panel
 from .viewer import Viewer
-from .widgets import button, icon_button, label
+from .widgets import button, label
 from .winchrome import apply_dark_titlebar
 from .worker import (FullProcessor, LatestWorker, PreviewProcessor, Source, analyze_source,
                      clamp_preview_rect, render_algos, render_noise)
@@ -88,69 +88,53 @@ class MainWindow(QMainWindow):
         self.info_panel.metaRequested.connect(self.open_meta)
         self.info_panel.openRequested.connect(self.choose_image)
         self.info_panel.batchRequested.connect(lambda: self.open_batch())
-        self.viewer.zoomChanged.connect(lambda z: self.zoom_label.setText(f'{z * 100:.0f}%'))
-        self.viewer.cursorMoved.connect(self._on_cursor)
         self.viewer.openRequested.connect(self.choose_image)
         self._sync_enabled()
 
     # ---- 画面の組み立て ----
 
     def _build(self):
-        bar = QFrame()
-        bar.setObjectName('bottomBar')
-        bar.setFixedHeight(theme.BOTTOM_BAR_HEIGHT)
-        self.zoom_out_btn = icon_button('minus', '縮小')
-        self.zoom_in_btn = icon_button('plus', '拡大')
-        self.fit_btn = button('全体表示')
-        self.zoom_label = label('—', 'mono')
-        self.zoom_label.setFixedWidth(52)
-        self.zoom_label.setAlignment(Qt.AlignCenter)
-        self.coords = label('', 'monoMuted')
-        self.coords.setFixedWidth(120)
-        self.info = label('', 'monoMuted')
-        self.status = label('', 'muted')
+        # 左の列：ファイル・メタデータ・結果（縦に送れる）と、下に固定した保存
+        self.status = label('', 'small')
+        self.status.setWordWrap(True)
         self.save_btn = button('保存', 'primary')
-        self.zoom_out_btn.clicked.connect(self.viewer.zoom_out)
-        self.zoom_in_btn.clicked.connect(self.viewer.zoom_in)
-        self.fit_btn.clicked.connect(self.viewer.fit)
         self.save_btn.clicked.connect(self.save)
-        bl = QHBoxLayout(bar)
-        bl.setContentsMargins(16, 0, 16, 0)
-        bl.setSpacing(8)
-        for w in (self.zoom_out_btn, self.zoom_label, self.zoom_in_btn, self.fit_btn):
-            bl.addWidget(w)
-        bl.addSpacing(12)
-        bl.addWidget(self.coords)
-        bl.addWidget(self.info)
-        bl.addStretch(1)
-        bl.addWidget(self.status)
-        bl.addSpacing(8)
-        bl.addWidget(self.save_btn)
-
-        center = QVBoxLayout()
-        center.setContentsMargins(0, 0, 0, 0)
-        center.setSpacing(0)
-        center.addWidget(self.viewer, 1)
-        center.addWidget(bar)
+        foot = QFrame()
+        foot.setObjectName('leftFoot')
+        fl = QVBoxLayout(foot)
+        fl.setContentsMargins(20, 12, 20, 20)
+        fl.setSpacing(8)
+        fl.addWidget(self.status)
+        fl.addWidget(self.save_btn)
+        left = QFrame()
+        left.setObjectName('panel')
+        left.setProperty('side', 'left')
+        left.setFixedWidth(theme.LEFT_PANEL_WIDTH)
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.setSpacing(0)
+        ll.addWidget(self._scroll(self.info_panel), 1)
+        ll.addWidget(foot)
 
         root = QWidget()
         lay = QHBoxLayout(root)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(self._scroll(self.info_panel, theme.LEFT_PANEL_WIDTH))
-        lay.addLayout(center, 1)
-        lay.addWidget(self._scroll(self.panel, theme.PANEL_WIDTH))
+        lay.addWidget(left)
+        lay.addWidget(self.viewer, 1)
+        right = self._scroll(self.panel)
+        right.setFixedWidth(theme.PANEL_WIDTH)
+        lay.addWidget(right)
         self.setCentralWidget(root)
 
     @staticmethod
-    def _scroll(panel, width):
+    def _scroll(panel):
         """項目が多いパネルを、低い画面では縦に送れるようにする"""
         area = QScrollArea()
         area.setObjectName('panelScroll')
         area.setWidget(panel)
         area.setWidgetResizable(True)
         area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        area.setFixedWidth(width)
         return area
 
     def showEvent(self, e):
@@ -159,8 +143,7 @@ class MainWindow(QMainWindow):
 
     def _sync_enabled(self):
         has = self.source is not None
-        for w in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn, self.panel):
-            w.setEnabled(has)
+        self.panel.setEnabled(has)
         self.save_btn.setVisible(has)
         self.save_btn.setEnabled(has)
         self.viewer.set_busy(self._awaiting or self._analyzing > 0)
@@ -202,9 +185,7 @@ class MainWindow(QMainWindow):
         self._toggles = ()
         self.panel.set_toggle_count(0)
         self.panel.pick.setChecked(False)
-        h, w = src.rgb.shape[:2]
         self.setWindowTitle(f'{Path(path).name} — {APP_NAME} {__version__}')
-        self.info.setText(f'{w} × {h}　{Path(path).suffix[1:].upper()}')
         self._awaiting = False
         self._debounce.stop()
         self.viewer.set_source(to_qimage(src.display))
@@ -359,9 +340,6 @@ class MainWindow(QMainWindow):
         self._awaiting = False
         self._sync_enabled()
         QMessageBox.warning(self, APP_NAME, f'処理中にエラーが起きました。\n\n{trace}')
-
-    def _on_cursor(self, x, y):
-        self.coords.setText(f'x {x}  y {y}' if x >= 0 else '')
 
     # ---- 保存・一括処理・メタデータ ----
 

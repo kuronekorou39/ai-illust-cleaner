@@ -25,7 +25,6 @@ FONT_UI_FALLBACK = 'Yu Gothic UI'
 
 LEFT_PANEL_WIDTH = 300   # ファイル・メタデータ・結果
 PANEL_WIDTH = 320        # 調整
-BOTTOM_BAR_HEIGHT = 56
 
 
 def load_fonts():
@@ -39,11 +38,11 @@ _QSS = """
 QMainWindow, QDialog { background: @BG; }
 QToolTip { background: @SURFACE; color: @TEXT; border: 1px solid @BORDER_STRONG; padding: 4px 8px; }
 
-#bottomBar { background: @SURFACE; border-top: 1px solid @BORDER; }
+#leftFoot { border-top: 1px solid @BORDER; }
 #panel { background: @PANEL; border-left: 1px solid @BORDER; }
 #panel[side="left"] { border-left: none; border-right: 1px solid @BORDER; }
 #section { border-bottom: 1px solid @BORDER; }
-#panelScroll { background: @PANEL; border: none; }
+#panelScroll, #panelBody { background: @PANEL; border: none; }
 
 QLabel { background: transparent; }
 QLabel[role="section"] { font-size: 12px; font-weight: 700; color: @MUTED; letter-spacing: 1px; }
@@ -80,6 +79,11 @@ QPushButton[kind="preset"]:checked:disabled { color: @DISABLED; border-color: @B
 QPushButton[kind="help"] { border: 1px solid @MUTED; border-radius: 9px; color: @MUTED; font-size: 11px;
     font-weight: 700; min-height: 16px; padding: 0; }
 QPushButton[kind="help"]:hover { border-color: @ACCENT; color: @ACCENT; }
+QPushButton[kind="warn"] { border: none; padding: 0; min-height: 22px; }
+QPushButton[kind="accordion"] { border: none; text-align: left; padding: 0; min-height: 24px;
+    font-size: 12px; font-weight: 700; color: @MUTED; letter-spacing: 1px; }
+QPushButton[kind="accordion"]:hover { color: @TEXT; }
+QPushButton[kind="accordion"]:checked { color: @MUTED; border: none; }
 QPushButton[kind="link"] { border: none; color: @MUTED; font-size: 12px; min-height: 24px; padding: 0 4px; }
 QPushButton[kind="link"]:hover { color: @ACCENT; }
 

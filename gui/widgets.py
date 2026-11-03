@@ -1,6 +1,6 @@
 """共通の部品"""
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QCursor, QFont, QPainter
+from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter
 from PySide6.QtWidgets import (QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
                                QSlider, QToolTip, QVBoxLayout, QWidget)
 
@@ -58,6 +58,71 @@ def help_button(text, name):
     b.setAccessibleDescription(text)
     b.clicked.connect(lambda: QToolTip.showText(QCursor.pos(), text, b))
     return b
+
+
+def warn_button(name):
+    """注意を出すアイコン。マウスを乗せるか、押すと内容を表示する（内容は setToolTip で入れる）"""
+    b = button('', 'icon')
+    b.setProperty('kind', 'warn')
+    b.setIcon(QIcon(icons.pixmap('warn', theme.ACCENT, 16)))
+    b.setIconSize(QSize(16, 16))
+    b.setFixedSize(22, 22)
+    b.setAccessibleName(name)
+    b.clicked.connect(lambda: QToolTip.showText(QCursor.pos(), b.toolTip(), b))
+    return b
+
+
+class Accordion(QWidget):
+    """見出しを押すと中身を開閉する"""
+
+    def __init__(self, title, help_text, content, expanded=False):
+        super().__init__()
+        self.head = button('', 'accordion', checkable=True)
+        self.head.setAccessibleName(title)
+        self._title = title
+        self.head.toggled.connect(self._sync)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(self.head, 1)
+        row.addWidget(help_button(help_text, f'{title}の説明'))
+        self.content = content
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        lay.addLayout(row)
+        lay.addWidget(content)
+        self.head.setChecked(expanded)
+        self._sync(expanded)
+
+    def _sync(self, on):
+        self.head.setText(f'{"▾" if on else "▸"}  {self._title}')
+        self.content.setVisible(on)
+
+
+class ZoomBar(QFrame):
+    """縮小・倍率・拡大・全体表示（画像の上に浮かせて置く）"""
+
+    def __init__(self, viewer):
+        super().__init__()
+        self.setObjectName('segmented')
+        self.setProperty('floating', True)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(3, 3, 3, 3)
+        lay.setSpacing(2)
+        out_btn = icon_button('minus', '縮小')
+        in_btn = icon_button('plus', '拡大')
+        fit_btn = button('全体表示', 'seg')
+        self.value = label('—', 'mono')
+        self.value.setFixedWidth(52)
+        self.value.setAlignment(Qt.AlignCenter)
+        for b in (out_btn, in_btn):
+            b.setProperty('kind', 'seg')
+        out_btn.clicked.connect(viewer.zoom_out)
+        in_btn.clicked.connect(viewer.zoom_in)
+        fit_btn.clicked.connect(viewer.fit)
+        viewer.zoomChanged.connect(lambda z: self.value.setText(f'{z * 100:.0f}%'))
+        for w in (out_btn, self.value, in_btn, fit_btn):
+            lay.addWidget(w)
 
 
 class ChoiceGrid(QWidget):

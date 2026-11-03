@@ -12,6 +12,7 @@ _SVG = {
     'minus': '<path d="M4 9h10"/>',
     'plus': '<path d="M4 9h10M9 4v10"/>',
     'image': '<rect x="2" y="3" width="14" height="12"/><path d="M2 12l4-4 3 3 3-2 4 3"/>',
+    'warn': '<path d="M9 2.5L16.5 15.5H1.5z"/><path d="M9 7.5v3.5M9 13v.8"/>',
 }
 _RENDER_SCALE = 3   # 高DPIでもぼけないよう大きめに描く
 
