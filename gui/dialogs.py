@@ -120,7 +120,7 @@ class SaveDialog(_Dialog):
         self.body.addWidget(self.original)
 
         self.body.addSpacing(6)
-        self.body.addWidget(label('消すメタデータ', 'section'))
+        self.body.addWidget(label('削除するメタデータ', 'section'))
         self.boxes = {}
         groups = meta.groups()
         for g, entries in groups.items():
@@ -172,7 +172,7 @@ class SaveDialog(_Dialog):
             text = '色の情報（ICCプロファイルなど）は、見た目が変わるため残します。'
         else:
             text = (f'{self._meta.format}形式は部分的に消せないため、PNG として保存し直し、'
-                    'メタデータはすべて消します（色の情報は残します）。')
+                    'メタデータはすべて削除します（色の情報は残します）。')
         if self.apply_processing() and 'c2pa' in self._meta.groups():
             text += '\nC2PA は署名が処理後の画像と合わなくなるため、反映するときは引き継ぎません。'
         self.note.setText(text)
@@ -255,7 +255,7 @@ class BatchDialog(_Dialog):
 
         self.body.addLayout(grid)
         self.body.addWidget(summary)
-        self.strip_meta = QCheckBox('メタデータをすべて消す（色の情報は残す）')
+        self.strip_meta = QCheckBox('メタデータをすべて削除する（色の情報は残す）')
         self.strip_meta.setChecked(True)
         self.strip_meta.setCursor(Qt.PointingHandCursor)
         self.body.addWidget(self.strip_meta)

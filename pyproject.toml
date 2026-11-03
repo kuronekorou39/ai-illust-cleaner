@@ -1,7 +1,7 @@
 [project]
 name = "ai-illust-cleaner"
 version = "0.1.0"
-description = "AI生成イラストのメタデータ確認・消去と、塗り面ノイズの可視化・除去を行うツール"
+description = "AI生成イラストのメタデータ確認、ノイズの可視化・除去、背景の透過を行うツール"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

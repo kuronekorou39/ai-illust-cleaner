@@ -15,7 +15,7 @@ from gui import icons, theme
 
 W, H = 1280, 640
 MARGIN = 72
-FEATURES = ('メタデータの確認と消去', '塗り面ノイズの可視化と除去', '単色背景の透過')
+FEATURES = ('メタデータの確認', '塗り面ノイズの可視化と除去', '単色背景の透過')
 
 app = QApplication.instance() or QApplication(sys.argv)
 theme.load_fonts()
