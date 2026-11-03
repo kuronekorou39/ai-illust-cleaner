@@ -57,6 +57,7 @@ def shot(name):
 wait(300)
 shot('0_empty')
 win.open_image(a.src)
+win.panel.cutout.setChecked(True)   # 背景の透過の結果も写す
 settle()
 shot('1_quad_fit')
 
