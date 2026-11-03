@@ -5,7 +5,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
-import noise
+from cleaner import noise
 from . import icons, theme
 from .widgets import Segmented, ZoomBar
 

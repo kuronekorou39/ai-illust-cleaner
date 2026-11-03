@@ -9,7 +9,7 @@ import pytest
 from PIL import Image, PngImagePlugin
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import metadata as md  # noqa: E402
+from cleaner import metadata as md  # noqa: E402
 
 A1111 = ('1girl, solo, smile\nNegative prompt: lowres, bad hands\n'
          'Steps: 28, Sampler: Euler a, CFG scale: 7, Seed: 12345, Size: 512x768, '
@@ -197,7 +197,7 @@ def test_unsupported_format():
 @pytest.mark.parametrize('strip_meta', [False, True])
 def test_save_png_carries_jpeg_metadata(tmp_path, strip_meta):
     from PIL import ImageCms
-    from denoise import load_image, save_png
+    from cleaner.denoise import load_image, save_png
     icc = ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes()
     src = tmp_path / 'src.jpg'
     Image.fromarray(_pixels()).save(src, 'JPEG', exif=_exif(A1111), xmp=XMP.encode(), icc_profile=icc)
@@ -215,7 +215,7 @@ def test_save_png_carries_jpeg_metadata(tmp_path, strip_meta):
 
 def test_save_clean_removes_selected_groups(tmp_path):
     """処理後の保存で、選んだ種類だけを消す（保存ダイアログの「反映する」）"""
-    from denoise import load_image, save_clean
+    from cleaner.denoise import load_image, save_clean
     src = tmp_path / 'src.png'
     src.write_bytes(_full_png())
     info, rgb, alpha = load_image(src)

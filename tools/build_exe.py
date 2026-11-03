@@ -18,5 +18,8 @@ dist = ROOT / 'dist'
 subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
                 '--distpath', str(dist), '--workpath', str(ROOT / 'build'),
                 str(ROOT / 'packaging' / f'{NAME}.spec')], check=True)
+# ライセンスは、展開したフォルダの一番上（exe の隣）に置く
+for doc in (ROOT / 'LICENSE', ROOT / 'docs' / 'licenses.md'):
+    shutil.copy2(doc, dist / NAME / doc.name)
 archive = shutil.make_archive(str(dist / f'{NAME}-{__version__}-windows'), 'zip', dist, NAME)
 print('saved:', archive)

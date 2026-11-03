@@ -2,7 +2,7 @@
 import numpy as np
 from PIL import Image
 
-import noise
+from . import noise
 
 _CANDIDATES = ['Yu Gothic', 'Meiryo', 'Hiragino Sans', 'Noto Sans CJK JP']
 

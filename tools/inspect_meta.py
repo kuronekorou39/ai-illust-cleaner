@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import metadata as md
+from cleaner import metadata as md
 
 PREVIEW = 300
 

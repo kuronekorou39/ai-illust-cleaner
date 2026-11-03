@@ -39,9 +39,9 @@ QMainWindow, QDialog { background: @BG; }
 QToolTip { background: @SURFACE; color: @TEXT; border: 1px solid @BORDER_STRONG; padding: 4px 8px; }
 
 #leftFoot { border-top: 1px solid @BORDER; }
-#panel { background: @PANEL; border-left: 1px solid @BORDER; }
-#panel[side="left"] { border-left: none; border-right: 1px solid @BORDER; }
 #section { border-bottom: 1px solid @BORDER; }
+#column { background: @PANEL; }
+#columnLine { background: @BORDER; }
 #panelScroll, #panelBody { background: @PANEL; border: none; }
 
 QLabel { background: transparent; }
@@ -79,7 +79,9 @@ QPushButton[kind="preset"]:checked:disabled { color: @DISABLED; border-color: @B
 QPushButton[kind="help"] { border: 1px solid @MUTED; border-radius: 9px; color: @MUTED; font-size: 11px;
     font-weight: 700; min-height: 16px; padding: 0; }
 QPushButton[kind="help"]:hover { border-color: @ACCENT; color: @ACCENT; }
-QPushButton[kind="warn"] { border: none; padding: 0; min-height: 22px; }
+QPushButton[kind="warn"] { border: none; padding: 0; min-height: 22px; color: @ACCENT; font-size: 12px; }
+QPushButton[kind="warn"]:hover { color: @TEXT; }
+QPushButton[kind="warn"]:checked { color: @ACCENT; border: none; }
 QPushButton[kind="accordion"] { border: none; text-align: left; padding: 0; min-height: 24px;
     font-size: 12px; font-weight: 700; color: @MUTED; letter-spacing: 1px; }
 QPushButton[kind="accordion"]:hover { color: @TEXT; }

@@ -2,9 +2,9 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
-import noise
-from cutout import AUTO_MAX
-from denoise import DEFAULT_DARK, DEFAULT_GRAD, DEFAULT_LAM
+from cleaner import noise
+from cleaner.cutout import AUTO_MAX
+from cleaner.denoise import DEFAULT_DARK, DEFAULT_GRAD, DEFAULT_LAM
 from .widgets import Accordion, ChoiceGrid, Segmented, SliderRow, button, help_button, label
 from .worker import Params
 
@@ -14,24 +14,12 @@ LAM_PRESETS = (('弱', 0.001), ('標準', 0.002), ('強', 0.005))
 DARK_MAX = 255
 GRAD_MAX = 400
 TOLERANCE_MAX = 64
-LINE_HELP = ('ノイズ除去で線がぼやけないよう、線と判断した部分は処理せず元のまま残します。\n'
-             '次のどちらかに当てはまる画素を線とみなします。\n\n'
-             '・線とみなす暗さ：これより暗い画素（大きくすると、濃い塗りも線として残る）\n'
-             '・線とみなす輪郭の強さ：色の変わり方がこれより急な画素（小さくすると、細かな境目も残る）\n\n'
-             '「保護する線を色で表示」で、線とみなした範囲を確かめられます。')
-NOISE_HELP = ('ノイズの見え方を切り替えます。ノイズ除去の結果や数値には影響しません。\n'
-              '数値は比べられるよう、常にメディアン差で計算しています。\n\n'
-              '抽出：画像から何を引いてノイズとみなすか\n'
-              + '\n'.join(f'・{name}：{desc.splitlines()[0]}' for name, desc in noise.ALGOS.values())
-              + '\n\n表示：取り出したノイズをどう見せるか\n'
-              + '\n'.join(f'・{name}：{desc.splitlines()[0]}' for name, desc in noise.STYLES.values()))
-CUTOUT_HELP = ('画像の縁の色を背景色とみなし、縁とつながっている同じ色の部分を透明にします。\n'
-               '腕と体の間など、囲まれた背景は「クリックで透明を切り替え」を押してから\n'
-               'その場所をクリックすると透明になります。もう一度クリックすると戻ります。\n'
-               '背景が単色のイラスト向けで、風景などの複雑な背景は対象外です。\n\n'
-               '許容差は「背景色とみなす色の差」です。自動では背景のばらつきのすぐ上に置き、\n'
-               '白に近い淡い塗りを背景と間違えないようにします。\n'
-               '背景の残りが気になるときは上げ、淡い塗りが消えるときは下げてください。')
+LINE_HELP = ('線と判断した部分は処理せず、元のまま残します。\n'
+             '暗さか輪郭の強さがしきい値を超えた画素を線とみなします。')
+NOISE_HELP = ('ノイズの見え方だけを切り替えます。\n'
+              '保存する画像や数値は変わりません。')
+CUTOUT_HELP = ('縁とつながった、縁と同じ色の部分を透明にします。\n'
+               '単色背景のイラスト向けです。')
 
 
 def _lam_to_tick(lam):
@@ -79,7 +67,7 @@ class Panel(QFrame):
 
     def __init__(self):
         super().__init__()
-        self.setObjectName('panel')
+        self.setObjectName('panelBody')
 
         # ノイズ除去（方式 → 強さ。強さは「面を平坦化」にだけ効く）
         self.lam = SliderRow('強さ', 1, LAM_SLIDER_MAX, _lam_to_tick(DEFAULT_LAM),
@@ -109,21 +97,20 @@ class Panel(QFrame):
         # 線の保護
         self.dark = SliderRow('線とみなす暗さ', 0, DARK_MAX, DEFAULT_DARK)
         self.grad = SliderRow('線とみなす輪郭の強さ', 0, GRAD_MAX, DEFAULT_GRAD)
-        self.dark.setToolTip('これより暗い画素を線として残します。大きくすると、濃い塗りも線として残ります。')
-        self.grad.setToolTip('色の変わり方がこれより急な画素を線として残します。小さくすると、細かな境目も残ります。')
+        self.dark.setToolTip('これより暗い画素を線として残します')
+        self.grad.setToolTip('色の変わり方がこれより急な画素を線として残します')
         for row in (self.dark, self.grad):
             row.changed.connect(lambda _, r=row: self.changed.emit(r.slider.isSliderDown()))
             row.released.connect(lambda: self.changed.emit(False))
         self.show_mask = QCheckBox('保護する線を色で表示')
-        self.show_mask.setToolTip('線とみなして処理しない範囲を、画像の上に色で重ねます。')
+        self.show_mask.setToolTip('線とみなした範囲を色で重ねます')
         self.show_mask.setCursor(Qt.PointingHandCursor)
         self.show_mask.toggled.connect(self.maskToggled)
 
         # ノイズの見え方
         self.algo = ChoiceGrid([(k, name, desc) for k, (name, desc) in noise.ALGOS.items()], 2)
         self.compare = button('4通りを並べて選ぶ', checkable=True)
-        self.compare.setToolTip('画面を4分割し、それぞれの抽出方式で取り出したノイズを並べます。\n'
-                                '画面をクリックすると、その方式に決まります。')
+        self.compare.setToolTip('4つの抽出方式を並べ、クリックで選びます')
         self.compare.toggled.connect(self.compareAlgos)
         self.noise_style = ChoiceGrid([(k, name, desc) for k, (name, desc) in noise.STYLES.items()], 3)
         for grid in (self.algo, self.noise_style):
@@ -139,11 +126,9 @@ class Panel(QFrame):
         self.tolerance = SliderRow('許容差', 0, TOLERANCE_MAX, AUTO_MAX)
         self.auto_tolerance = QCheckBox('自動')
         self.holes = QCheckBox('囲まれた背景も自動で透明にする')
-        self.holes.setToolTip('腕と体の間などの、背景色と同じ色で大きい領域を透明にします。\n'
-                              '白い胸など、背景色と同じ色の大きな塗りも消えることがあります。\n'
-                              '確実なのは、下の「クリックで透明を切り替え」で場所を指定する方法です。')
+        self.holes.setToolTip('腕と体の間など、囲まれた背景も透明にします')
         self.pick = button('クリックで透明を切り替え', checkable=True)
-        self.pick.setToolTip('押した後、画像上の場所をクリックすると、その部分の透明・不透明が入れ替わります')
+        self.pick.setToolTip('押してから画像をクリックすると、透明・不透明が入れ替わります')
         self.pick_clear = button('切り替えを取り消す', 'link')
         self.pick_clear.hide()
         pick_row = QVBoxLayout()

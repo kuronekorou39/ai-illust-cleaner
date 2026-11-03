@@ -1,19 +1,19 @@
 """AI生成イラストの塗り面ノイズ除去（線は元画像のまま保護）
 
 使い方:
-  python denoise.py 入力.png 出力.png                  # 標準（L0スムージング）
-  python denoise.py 入力.png 出力.png --lam 0.001      # 弱め（グラデーション・頬染めを残したい時）
-  python denoise.py 入力.png 出力.png --lam 0.005      # 強め（ベタ塗り寄り）
-  python denoise.py 入力.png 出力.png --mode soft      # 控えめ（小さな揺らぎだけ除去）
-  python denoise.py 入力フォルダ 出力フォルダ          # フォルダ一括処理
-  python denoise.py 入力.png 出力.png --strip-meta     # PNGメタデータを引き継がない
-  python denoise.py 入力.png 出力.png --cutout         # 単色の背景を透明にする
+  python -m cleaner.denoise 入力.png 出力.png                  # 標準（L0スムージング）
+  python -m cleaner.denoise 入力.png 出力.png --lam 0.001      # 弱め（グラデーション・頬染めを残したい時）
+  python -m cleaner.denoise 入力.png 出力.png --lam 0.005      # 強め（ベタ塗り寄り）
+  python -m cleaner.denoise 入力.png 出力.png --mode soft      # 控えめ（小さな揺らぎだけ除去）
+  python -m cleaner.denoise 入力フォルダ 出力フォルダ          # フォルダ一括処理
+  python -m cleaner.denoise 入力.png 出力.png --strip-meta     # PNGメタデータを引き継がない
+  python -m cleaner.denoise 入力.png 出力.png --cutout         # 単色の背景を透明にする
 """
 import argparse
 from pathlib import Path
 
-from cutout import DEFAULT_TOLERANCE, cutout, merge_alpha
-from metadata import PNG_XMP_KEY, strip
+from .cutout import DEFAULT_TOLERANCE, cutout, merge_alpha
+from .metadata import PNG_XMP_KEY, strip
 
 import cv2
 import numpy as np

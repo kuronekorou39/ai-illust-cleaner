@@ -6,8 +6,8 @@ from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QMainWindow, QMessageBox,
                                QScrollArea, QVBoxLayout, QWidget)
 
-import metadata as md
-from denoise import load_image, save_clean, save_png
+from cleaner import metadata as md
+from cleaner.denoise import load_image, save_clean, save_png
 from . import __version__, icons, theme
 from .dialogs import BATCH_SUFFIX, BatchDialog, MetaDialog, SaveDialog
 from .imaging import composite_on_checker, mask_to_qimage, to_qimage
@@ -106,36 +106,44 @@ class MainWindow(QMainWindow):
         fl.setSpacing(8)
         fl.addWidget(self.status)
         fl.addWidget(self.save_btn)
-        left = QFrame()
-        left.setObjectName('panel')
-        left.setProperty('side', 'left')
-        left.setFixedWidth(theme.LEFT_PANEL_WIDTH)
-        ll = QVBoxLayout(left)
-        ll.setContentsMargins(0, 0, 0, 0)
-        ll.setSpacing(0)
-        ll.addWidget(self._scroll(self.info_panel), 1)
-        ll.addWidget(foot)
 
         root = QWidget()
         lay = QHBoxLayout(root)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(left)
+        lay.addWidget(self._column(self.info_panel, theme.LEFT_PANEL_WIDTH, foot))
+        lay.addWidget(self._line())
         lay.addWidget(self.viewer, 1)
-        right = self._scroll(self.panel)
-        right.setFixedWidth(theme.PANEL_WIDTH)
-        lay.addWidget(right)
+        lay.addWidget(self._line())
+        lay.addWidget(self._column(self.panel, theme.PANEL_WIDTH))
         self.setCentralWidget(root)
 
     @staticmethod
-    def _scroll(panel):
-        """項目が多いパネルを、低い画面では縦に送れるようにする"""
+    def _column(body, width, foot=None):
+        """左右のパネルの列。中身は低い画面では縦に送れ、foot は下に固定する"""
         area = QScrollArea()
         area.setObjectName('panelScroll')
-        area.setWidget(panel)
+        area.setWidget(body)
         area.setWidgetResizable(True)
         area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        return area
+        col = QFrame()
+        col.setObjectName('column')
+        col.setFixedWidth(width)
+        lay = QVBoxLayout(col)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(area, 1)
+        if foot is not None:
+            lay.addWidget(foot)
+        return col
+
+    @staticmethod
+    def _line():
+        """パネルと画像の間の境界線"""
+        line = QFrame()
+        line.setObjectName('columnLine')
+        line.setFixedWidth(1)
+        return line
 
     def showEvent(self, e):
         apply_dark_titlebar(self)

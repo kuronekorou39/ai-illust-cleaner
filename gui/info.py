@@ -5,22 +5,17 @@ from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
 
-import metadata as md
+from cleaner import metadata as md
 from . import icons, score, theme
-from .widgets import ClickableLabel, Legend, MetricBars, StatTile, button, help_button, label, warn_button
+from .widgets import ClickableLabel, Legend, MetricBars, StatTile, button, help_button, label, WarnNote
 
 META_PREVIEW_CHARS = 140
 META_SUMMARY_KEYS = ('シード値', 'モデル')   # 左パネルに出す生成設定
-NOISE_HELP = ('線を除いた塗りの部分にある、細かな色のばらつきです。\n'
-              '「ノイズ平均」はばらつきの平均の大きさ、\n'
-              '「1階調を超える画素」は目立つばらつきがある画素の割合で、\n'
-              'どちらも小さいほどきれいです。\n\n'
-              'SSIM と PSNR は処理前との近さで、大きいほど元の絵が保たれています。')
-META_HELP = ('画像ファイルに埋め込まれた、画素以外の情報です。\n\n'
-             + '\n'.join(f'・{name}：{desc}' for name, desc in md.GROUPS.values())
-             + '\n\n公開前に、意図しない情報が残っていないか確かめてください。')
-
-EXTREME_NOISE_TEXT = ('ノイズが大きすぎます。このツールが対象とする塗り面ノイズ（±1階調程度）の範囲を超えているため、\n'
+NOISE_HELP = ('線以外の塗りにある細かな色のばらつきで、小さいほどきれいです。\n'
+              'SSIM・PSNR は処理前との近さで、大きいほど元の絵を保っています。')
+META_HELP = ('画像ファイルに埋め込まれた、画素以外の情報です。\n'
+             '公開前に、意図しない情報が残っていないか確かめてください。')
+EXTREME_NOISE_TEXT = ('このツールが対象とする塗り面ノイズ（±1階調程度）の範囲を超えているため、'
                       '除去しても残ります。一般的なノイズ除去（NLM など）のほうが向いています。')
 
 
@@ -73,14 +68,12 @@ def _section(*items, spacing=10, last=False):
     return box
 
 
-def _titled(text, help_text, right=None, extra=None):
+def _titled(text, help_text, right=None):
     """見出しと「？」ボタンを並べる"""
     row = QHBoxLayout()
     row.setSpacing(6)
     row.addWidget(label(text, 'section'))
     row.addWidget(help_button(help_text, f'{text}の説明'))
-    if extra is not None:
-        row.addWidget(extra)
     row.addStretch(1)
     if right is not None:
         row.addWidget(right)
@@ -123,8 +116,7 @@ class InfoPanel(QFrame):
         # 結果（塗り面ノイズの処理前後と、元の絵の保たれ具合）
         self.noise_mean = MetricBars('塗り面ノイズ平均', lambda v: f'{v:.3f}')
         self.noise_over = MetricBars('1階調を超える画素', lambda v: f'{v:.2f}%')
-        self.noise_warn = warn_button('ノイズについての注意')
-        self.noise_warn.setToolTip(EXTREME_NOISE_TEXT)
+        self.noise_warn = WarnNote('ノイズが大きすぎます', EXTREME_NOISE_TEXT)
         self.noise_warn.hide()
         self.ssim = StatTile('SSIM')
         self.psnr = StatTile('PSNR')
@@ -136,8 +128,8 @@ class InfoPanel(QFrame):
 
         self.meta_box = _section(_titled('メタデータ', META_HELP), *self.meta_rows.values(), self.notes,
                                  self.meta_text, spacing=4)
-        self.result_box = _section(_titled('塗り面ノイズ', NOISE_HELP, legend, self.noise_warn), self.noise_mean,
-                                   self.noise_over, tiles, spacing=12, last=True)
+        self.result_box = _section(_titled('塗り面ノイズ', NOISE_HELP, legend), self.noise_mean,
+                                   self.noise_over, tiles, self.noise_warn, spacing=12, last=True)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -166,6 +158,7 @@ class InfoPanel(QFrame):
         self._show_meta(src.metadata)
         for kind in ('before', 'after'):
             self.set_metrics(kind, None)
+        self.noise_warn.reset()
         self.noise_warn.hide()
         self._sync_loaded(True)
 

@@ -2,7 +2,7 @@
 import numpy as np
 from PySide6.QtGui import QColor, QImage
 
-import noise
+from cleaner import noise
 from . import theme
 
 DEFAULT_NOISE = ('median', 'strength')   # ノイズの (抽出方式, 表示方式)

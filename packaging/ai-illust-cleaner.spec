@@ -17,7 +17,7 @@ QT_EXCLUDES = ['PySide6.' + m for m in (
 a = Analysis(
     [str(ROOT / 'packaging' / 'launcher.py')],
     pathex=[str(ROOT)],
-    datas=[(str(ROOT / 'gui' / 'assets'), 'gui/assets'), (str(ROOT / 'LICENSE'), '.')],
+    datas=[(str(ROOT / 'gui' / 'assets'), 'gui/assets')],
     excludes=QT_EXCLUDES + ['matplotlib', 'tkinter', 'pytest', 'IPython'],
 )
 # 依存に付いてくるが使わないファイル（動画の読み込み・ソフトウェアOpenGL・PDF・QML・仮想キーボード・翻訳など）

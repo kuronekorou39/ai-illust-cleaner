@@ -7,10 +7,10 @@ from itertools import count
 import numpy as np
 from PySide6.QtCore import QThread, Signal
 
-from common import psnr, ssim
-from cutout import cutout, is_uniform_background, merge_alpha
-from denoise import blend, line_mask, smooth
-import noise
+from cleaner.common import psnr, ssim
+from cleaner.cutout import cutout, is_uniform_background, merge_alpha
+from cleaner.denoise import blend, line_mask, smooth
+from cleaner import noise
 from .imaging import composite_on_checker, composite_on_white, noise_image, noise_view
 
 PREVIEW_PAD = 24         # プレビュー領域の外側に足す余白（端の影響を表示範囲に入れないため）

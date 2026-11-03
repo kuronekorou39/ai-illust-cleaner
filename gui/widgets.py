@@ -60,16 +60,27 @@ def help_button(text, name):
     return b
 
 
-def warn_button(name):
-    """注意を出すアイコン。マウスを乗せるか、押すと内容を表示する（内容は setToolTip で入れる）"""
-    b = button('', 'icon')
-    b.setProperty('kind', 'warn')
-    b.setIcon(QIcon(icons.pixmap('warn', theme.ACCENT, 16)))
-    b.setIconSize(QSize(16, 16))
-    b.setFixedSize(22, 22)
-    b.setAccessibleName(name)
-    b.clicked.connect(lambda: QToolTip.showText(QCursor.pos(), b.toolTip(), b))
-    return b
+class WarnNote(QWidget):
+    """注意アイコンと短い見出し。押すと説明が下に開く"""
+
+    def __init__(self, title, text):
+        super().__init__()
+        self.head = button(title, 'warn', checkable=True)
+        self.head.setIcon(QIcon(icons.pixmap('warn', theme.ACCENT, 16)))
+        self.head.setIconSize(QSize(16, 16))
+        self.body = label(text, 'small')
+        self.body.setWordWrap(True)
+        self.body.setContentsMargins(24, 0, 0, 0)   # 見出しの文字の位置にそろえる
+        self.head.toggled.connect(self.body.setVisible)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        lay.addWidget(self.head, 0, Qt.AlignLeft)
+        lay.addWidget(self.body)
+        self.body.hide()
+
+    def reset(self):
+        self.head.setChecked(False)
 
 
 class Accordion(QWidget):

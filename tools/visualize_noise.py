@@ -10,7 +10,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from common import JP_FONTS, load_rgb_on_white, fill_noise
+from cleaner.common import JP_FONTS, load_rgb_on_white, fill_noise
 
 plt.rcParams['font.family'] = JP_FONTS
 

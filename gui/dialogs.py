@@ -6,9 +6,9 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDialog, Q
                                QHBoxLayout, QLineEdit, QPlainTextEdit, QProgressBar, QRadioButton,
                                QVBoxLayout)
 
-import metadata as md
-from cutout import cutout, merge_alpha
-from denoise import clean, load_image, save_png
+from cleaner import metadata as md
+from cleaner.cutout import cutout, merge_alpha
+from cleaner.denoise import clean, load_image, save_png
 from .widgets import Segmented, button, label
 from .winchrome import apply_dark_titlebar
 
