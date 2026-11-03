@@ -1,8 +1,11 @@
 # ai-illust-cleaner
 
-![ai-illust-cleaner](docs/banner.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/banner-dark.png">
+  <img alt="ai-illust-cleaner" src="docs/banner-light.png">
+</picture>
 
-AI生成イラストを、公開前にきれいにする Windows 用のツール。
+AI生成イラストのメタデータを確かめて消し、塗りのノイズを取り除く Windows 用のツール。
 
 - **メタデータの確認と消去**：プロンプトやシード値、位置情報などが残っていないかを確かめ、画素を変えずに消す
 - **ノイズの可視化と除去**：塗りの細かな色ムラ（VAE由来のノイズ）を見える形にし、線を保ったまま除去する
