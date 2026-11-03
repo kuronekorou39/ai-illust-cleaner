@@ -38,6 +38,8 @@ EXIF_IFD, GPS_IFD = 0x8769, 0x8825
 USER_COMMENT, IMAGE_DESCRIPTION = 0x9286, 0x010E
 AI_SOURCE_TYPES = ('trainedAlgorithmicMedia', 'compositeWithTrainedAlgorithmicMedia')   # IPTC の「AI生成」の区分
 PREVIEW_CHARS = 2000   # すべての項目の一覧で、長い値を切り詰める長さ
+MAX_TEXT_BYTES = 8 * 2 ** 20   # 圧縮されたテキストを展開する上限（小さなファイルが巨大に膨らむ細工に備える）
+MAX_XMP_PARSE = 2 * 2 ** 20    # XMP を項目に分けて表示する上限
 
 # A1111 の設定の行「Steps: 20, Sampler: Euler a, ...」の1項目（値は引用符で囲まれていることがある）
 _A1111_SETTING = re.compile(r'\s*([\w \-/().]+?):\s*("(?:\\.|[^\\"])*"|[^,]*)(?:,|$)')
@@ -126,10 +128,17 @@ def read_bytes(data):
     return meta
 
 
+def _inflate(data):
+    """zlib で圧縮されたデータを、MAX_TEXT_BYTES まで展開する"""
+    return zlib.decompressobj().decompress(data, MAX_TEXT_BYTES)
+
+
 def png_texts(data):
-    """PNG のテキスト（tEXt / zTXt / iTXt）をキー -> 値で返す。画像データの後ろにあるものも含む"""
+    """PNG のテキスト（tEXt / zTXt / iTXt）をキー -> 値で返す。画像データの後ろにあるものも含む
+    途中でファイルが壊れていたら、そこまでに読めたものを返す
+    """
     texts = {}
-    for ctype, body in _png_chunks(data):
+    for ctype, body in _safe(_png_chunks(data)):
         if ctype not in (b'tEXt', b'zTXt', b'iTXt'):
             continue
         key, _, rest = body.partition(b'\x00')
@@ -137,12 +146,12 @@ def png_texts(data):
             if ctype == b'tEXt':
                 value = rest.decode('latin-1')
             elif ctype == b'zTXt':
-                value = zlib.decompress(rest[1:]).decode('latin-1')
+                value = _inflate(rest[1:]).decode('latin-1')
             else:
                 compressed, rest = rest[0], rest[2:]
                 _lang, _, rest = rest.partition(b'\x00')
                 _translated, _, rest = rest.partition(b'\x00')
-                value = (zlib.decompress(rest) if compressed else rest).decode('utf-8', 'replace')
+                value = (_inflate(rest) if compressed else rest).decode('utf-8', 'replace')
         except (zlib.error, IndexError):
             continue
         texts.setdefault(key.decode('latin-1'), value)
@@ -246,6 +255,8 @@ def _read_xmp(xmp, meta):
 
 def xmp_fields(xmp):
     """XMP の値を (名前, 値) の並びにする（表示用）。読めなければ空"""
+    if len(xmp) > MAX_XMP_PARSE:
+        return []
     prefixes = {uri: p for p, uri in re.findall(r'xmlns:([\w-]+)="([^"]+)"', xmp)}
 
     def name(tag):
@@ -274,7 +285,7 @@ def xmp_fields(xmp):
 
 def find_c2pa(data, fmt):
     """C2PA のマニフェストがあれば、その概要を返す（無ければ None）"""
-    blocks = [body for kind, body in _iter_blocks(data, fmt) if kind == 'c2pa']
+    blocks = [body for kind, body in _safe(_iter_blocks(data, fmt)) if kind == 'c2pa']
     if not blocks:
         return None
     raw = b''.join(blocks)
@@ -486,10 +497,24 @@ def _iter_blocks(data, fmt):
 
 # ---- PNG
 
+class BrokenFile(ValueError):
+    """ファイルの構造が壊れていて読めない"""
+
+
+def _safe(blocks):
+    """読み取り用：壊れたところで止め、それまでに読めた分だけを返す"""
+    try:
+        yield from blocks
+    except BrokenFile:
+        return
+
+
 def _png_chunks(data):
     pos = 8
     while pos + 8 <= len(data):
         length, ctype = struct.unpack('>I4s', data[pos:pos + 8])
+        if pos + 12 + length > len(data):
+            raise BrokenFile('PNG のチャンクが途中で切れています')
         yield ctype, data[pos + 8:pos + 8 + length]
         pos += 12 + length
 
@@ -528,8 +553,8 @@ def _jpeg_segments(data):
     """SOS より前のセグメントを (マーカー, 中身) で返す。SOS 以降は (SOS, 残り全部)"""
     pos = 2
     while pos < len(data):
-        if data[pos] != 0xFF:
-            raise ValueError('JPEG のセグメントを読めません')
+        if data[pos] != 0xFF or pos + 1 >= len(data):
+            raise BrokenFile('JPEG のセグメントを読めません')
         marker = data[pos + 1]
         if marker == 0xFF:   # 詰め物
             pos += 1
@@ -541,7 +566,11 @@ def _jpeg_segments(data):
         if marker in (_SOS, _EOI):
             yield marker, data[pos + 2:]
             return
+        if pos + 4 > len(data):
+            raise BrokenFile('JPEG のセグメントが途中で切れています')
         length = struct.unpack('>H', data[pos + 2:pos + 4])[0]
+        if length < 2 or pos + 2 + length > len(data):
+            raise BrokenFile('JPEG のセグメントが途中で切れています')
         yield marker, data[pos + 4:pos + 2 + length]
         pos += 2 + length
 
@@ -590,6 +619,8 @@ def _webp_chunks(data):
     pos = 12
     while pos + 8 <= len(data):
         fourcc, size = struct.unpack('<4sI', data[pos:pos + 8])
+        if pos + 8 + size > len(data):
+            raise BrokenFile('WebP のチャンクが途中で切れています')
         yield fourcc, data[pos + 8:pos + 8 + size]
         pos += 8 + size + (size & 1)
 

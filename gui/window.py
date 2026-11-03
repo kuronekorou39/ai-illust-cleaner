@@ -1,4 +1,5 @@
 """メインウィンドウ"""
+import traceback
 from dataclasses import replace
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from cleaner import metadata as md
 from cleaner.denoise import load_image, save_clean, save_png
 from . import __version__, icons, theme
 from .dialogs import BATCH_SUFFIX, BatchDialog, MetaDialog, SaveDialog
-from .imaging import composite_on_checker, mask_to_qimage, to_qimage
+from .imaging import NOISE_CACHE, composite_on_checker, mask_to_qimage, to_qimage
 from .info import InfoPanel
 from .panel import Panel
 from .viewer import Viewer
@@ -30,6 +31,7 @@ STATUS_SHOW_MS = 6000     # 保存完了などの一時的なメッセージを�
 class Task(QThread):
     """関数を1回だけ裏で実行する"""
     done = Signal(object)
+    failed = Signal(str)
 
     def __init__(self, fn, arg, parent):
         super().__init__(parent)
@@ -37,7 +39,10 @@ class Task(QThread):
         self.finished.connect(self.deleteLater)
 
     def run(self):
-        self.done.emit(self._fn(self._arg))
+        try:
+            self.done.emit(self._fn(self._arg))
+        except Exception:
+            self.failed.emit(traceback.format_exc())
 
 
 class MainWindow(QMainWindow):
@@ -189,6 +194,7 @@ class MainWindow(QMainWindow):
             return
         self.source = src
         self.result = None
+        NOISE_CACHE.clear()   # 前の画像のノイズは使わない
         self._smoothed = (None, None)
         self._toggles = ()
         self.panel.set_toggle_count(0)
@@ -208,9 +214,14 @@ class MainWindow(QMainWindow):
         task = Task(fn, arg, self)
         task.done.connect(on_done)
         task.done.connect(self._on_task_done)
+        task.failed.connect(self._on_task_failed)
         self._analyzing += 1
         self._sync_enabled()
         task.start()
+
+    def _on_task_failed(self, trace):
+        self._on_task_done(None)
+        self._show_error(trace)
 
     def _on_task_done(self, _):
         self._analyzing -= 1
@@ -347,6 +358,9 @@ class MainWindow(QMainWindow):
     def _on_failed(self, trace):
         self._awaiting = False
         self._sync_enabled()
+        self._show_error(trace)
+
+    def _show_error(self, trace):
         QMessageBox.warning(self, APP_NAME, f'処理中にエラーが起きました。\n\n{trace}')
 
     # ---- 保存・一括処理・メタデータ ----

@@ -64,7 +64,9 @@ def ssim(a, b, data_range=255):
         vy = cov_norm * (f(y * y) - uy * uy)
         vxy = cov_norm * (f(x * y) - ux * uy)
         s = ((2 * ux * uy + c1) * (2 * vxy + c2)) / ((ux ** 2 + uy ** 2 + c1) * (vx + vy + c2))
-        scores.append(s[pad:-pad, pad:-pad].mean())   # 窓が画像からはみ出す縁は除く
+        if min(s.shape) > 2 * pad:
+            s = s[pad:-pad, pad:-pad]   # 窓が画像からはみ出す縁は除く
+        scores.append(s.mean())
     return float(np.mean(scores))
 
 

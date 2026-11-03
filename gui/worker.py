@@ -16,6 +16,7 @@ from .imaging import composite_on_checker, composite_on_white, noise_image, nois
 PREVIEW_PAD = 24         # プレビュー領域の外側に足す余白（端の影響を表示範囲に入れないため）
 PREVIEW_MAX_SIDE = 512   # プレビューで処理する領域の一辺の上限
 _source_ids = count(1)
+_result_ids = count(1)
 
 
 @dataclass(frozen=True)
@@ -120,10 +121,11 @@ class FullProcessor:
             result, cut, tolerance = cutout(result, params.tolerance, params.holes, params.toggles)
             alpha = merge_alpha(cut, src.alpha)
             view = composite_on_checker(result, alpha)
-        noise_rgb, mean, over = noise_view(display, noise_key)
+        result_id = next(_result_ids)
+        noise_rgb, mean, over = noise_view(display, noise_key, ('result', result_id))
         a, b = src.display.astype(float), display.astype(float)
         return {
-            'source_id': src.id, 'params': params, 'noise_key': noise_key,
+            'source_id': src.id, 'result_id': result_id, 'params': params, 'noise_key': noise_key,
             'result': result, 'alpha': alpha, 'display': display, 'view': view, 'noise': noise_rgb, 'mask': mask,
             'tolerance': tolerance,
             'smoothed': self._smoothed,
@@ -175,7 +177,7 @@ class PreviewProcessor:
 def analyze_source(job):
     """元画像のノイズマップ・指標・背景が単色か"""
     src, noise_key = job
-    noise_rgb, mean, over = noise_view(src.display, noise_key)
+    noise_rgb, mean, over = noise_view(src.display, noise_key, ('source', src.id))
     return {'source_id': src.id, 'noise_key': noise_key, 'noise': noise_rgb, 'metrics': {'mean': mean, 'over': over},
             'uniform_bg': is_uniform_background(src.display)}
 
@@ -184,8 +186,9 @@ def render_noise(job):
     """表示方式を切り替えたときに、元画像と処理後のノイズマップを描き直す"""
     src, result, noise_key = job
     return {'source_id': src.id, 'noise_key': noise_key, 'result': result,
-            'orig': noise_image(src.display, noise_key),
-            'after': None if result is None else noise_image(result['display'], noise_key)}
+            'orig': noise_image(src.display, noise_key, ('source', src.id)),
+            'after': None if result is None else noise_image(result['display'], noise_key,
+                                                              ('result', result['result_id']))}
 
 
 def clamp_preview_rect(rect, center):
@@ -206,4 +209,4 @@ def render_algos(job):
     """抽出方式を4通り並べて比べるための、元画像のノイズマップ"""
     src, style = job
     return {'source_id': src.id, 'style': style,
-            'layers': {k: noise_image(src.display, (k, style)) for k in noise.ALGOS}}
+            'layers': {k: noise_image(src.display, (k, style), ('source', src.id)) for k in noise.ALGOS}}

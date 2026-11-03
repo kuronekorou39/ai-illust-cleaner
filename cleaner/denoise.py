@@ -53,12 +53,28 @@ def clean(rgb, mode='l0', lam=DEFAULT_LAM, dark=DEFAULT_DARK, grad_th=DEFAULT_GR
     return blend(rgb, smooth(rgb, mode, lam), line_mask(rgb, dark, grad_th))
 
 
+MAX_PIXELS = 40_000_000   # 開ける画像の大きさの上限（8K の約3300万画素まで）。処理の時間とメモリを抑える
+MIN_SIDE = 16             # 短い辺がこれ未満の画像は、ノイズの計算が成り立たない
+_GRAY16 = ('I;16', 'I;16B', 'I;16L', 'I')
+
+
 def load_image(src):
-    """(元画像のメタデータ, RGB配列, アルファ配列 or None) を返す"""
+    """(元画像のメタデータ, RGB配列, アルファ配列 or None) を返す
+    大きすぎる・小さすぎる画像は、画素を読み込む前に ValueError にする
+    """
     pil = Image.open(src)
+    w, h = pil.size
+    if w * h > MAX_PIXELS:
+        raise ValueError(f'画像が大きすぎます（{w}×{h}）。{MAX_PIXELS // 10_000:,}万画素まで開けます。')
+    if min(w, h) < MIN_SIDE:
+        raise ValueError(f'画像が小さすぎます（{w}×{h}）。')
+    info = dict(pil.info)
+    bands = pil.getbands()
+    if pil.mode in _GRAY16:   # 16bit のグレーは上位8bitにする（そのまま変換すると白く飛ぶ）
+        pil = Image.fromarray((np.asarray(pil).astype(np.uint32) >> 8).clip(0, 255).astype(np.uint8), 'L')
     rgba = np.asarray(pil.convert('RGBA'))
-    alpha = rgba[..., 3] if 'A' in pil.getbands() else None
-    return dict(pil.info), np.ascontiguousarray(rgba[..., :3]), alpha
+    alpha = rgba[..., 3] if 'A' in bands else None
+    return info, np.ascontiguousarray(rgba[..., :3]), alpha
 
 
 def save_png(out, alpha, meta, dst, strip_meta=False):
