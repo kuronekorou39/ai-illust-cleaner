@@ -15,6 +15,11 @@ MEDIAN_SIZE = 7
 GAUSS_SIGMA = 1.5
 BILATERAL = dict(d=7, sigmaColor=8, sigmaSpace=3)   # 塗りの揺らぎ（数階調）だけをならし、線はまたがない
 LAPLACIAN_NORM = np.sqrt(20)   # 4近傍ラプラシアンで、白色ノイズの振幅が元の大きさにそろう係数
+# 緩いグラデーションは1階調ずつの段差になり、段差の境目は周りとの差が1になる。
+# 周りの8画素のうちこの数以上と3色とも同じ値なら、平らな面の一部（段差の境目）とみなしてノイズに数えない。
+# ランダムな粒は周りとそろわないので、ほとんど数え落とさない
+STEP_SAME_NEIGHBORS = 4
+_NEIGHBORS = [(dy, dx) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if (dy, dx) != (0, 0)]
 
 FULL_SCALE = 3.0       # 強さ表示で最大輝度になるノイズ強度（階調）
 SPLIT_SCALE = 1.5      # 明暗・色味の表示で最大輝度になる値。RGB3色の合計より小さく出るため低めにし、両者は同じ尺度にそろえる
@@ -73,7 +78,17 @@ def extract(rgb, algo='median'):
         res = rgb - _smooth(rgb, algo)
     edge = line_mask(rgb)
     res[edge] = 0
+    res[_gradient_steps(rgb, res)] = 0
     return res, edge
+
+
+def _gradient_steps(rgb, res):
+    """緩いグラデーションの段差の境目（差が1階調以内で、周りに同じ値の画素が並んでいる）"""
+    q = np.rint(rgb).astype(np.int16)
+    h, w = q.shape[:2]
+    p = np.pad(q, ((1, 1), (1, 1), (0, 0)), mode='edge')
+    same = sum((p[1 + dy:1 + dy + h, 1 + dx:1 + dx + w] == q).all(2).astype(np.uint8) for dy, dx in _NEIGHBORS)
+    return (np.abs(res) <= 1).all(2) & (same >= STEP_SAME_NEIGHBORS)
 
 
 def magnitude(res):
