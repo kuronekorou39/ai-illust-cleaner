@@ -30,7 +30,7 @@ AI生成イラストのメタデータの確認、ノイズの可視化と除去
 | | 対応 |
 |---|---|
 | メタデータ | PNG・JPEG・WebP の生成情報（A1111 / Forge・ComfyUI・NovelAI・InvokeAI）・EXIF・XMP・C2PA |
-| ノイズ除去 | PNG（±1階調程度の塗りのノイズ。JPEG のブロックノイズは対象外） |
+| ノイズ除去 | PNG・JPEG・WebP など（塗りの細かな色ムラ。保存は PNG） |
 
 ## 技術スタック
 
