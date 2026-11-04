@@ -14,8 +14,12 @@ META_SUMMARY_KEYS = ('シード値', 'モデル')   # 左パネルに出す生�
 NOISE_HELP = ('線以外の塗りにある細かな色のばらつきで、小さいほどきれいです。\n'
               'SSIM・PSNR は処理前との近さで、大きいほど元の絵を保っています。')
 META_HELP = '画像ファイルに埋め込まれた、画素以外の情報です。'
-EXTREME_NOISE_TEXT = ('このツールが対象とする塗り面ノイズ（±1階調程度）の範囲を超えているため、'
-                      '除去しても残ります。一般的なノイズ除去（NLM など）のほうが向いています。')
+MOSTLY_LINES = 0.5   # 線とみなした割合がこれを超えたら、ほとんど処理できていない
+NOISE_LEFT_TITLE = '処理後もノイズが多く残っています'
+NOISE_LEFT_TEXT = {
+    'lines': '画像の多くを線とみなして、処理していません。「線とみなす暗さ」を下げるか、「線とみなす輪郭の強さ」を上げてください。',
+    'strong': 'このツールが対象とする塗りのノイズ（±1階調程度）より強いノイズです。強さを上げてください。',
+}
 
 
 class ValueRow(QWidget):
@@ -115,7 +119,7 @@ class InfoPanel(QFrame):
         # 結果（塗り面ノイズの処理前後と、元の絵の保たれ具合）
         self.noise_mean = MetricBars('塗り面ノイズ平均', lambda v: f'{v:.3f}')
         self.noise_over = MetricBars('1階調を超える画素', lambda v: f'{v:.2f}%')
-        self.noise_warn = WarnNote('ノイズが大きすぎます', EXTREME_NOISE_TEXT)
+        self.noise_warn = WarnNote(NOISE_LEFT_TITLE, '')
         self.noise_warn.hide()
         self.ssim = StatTile('SSIM')
         self.psnr = StatTile('PSNR')
@@ -191,7 +195,6 @@ class InfoPanel(QFrame):
     def set_analysis(self, metrics, uniform_bg):
         """元画像の計測結果"""
         self.info.setText(self.info.text() + ('　背景 単色' if uniform_bg else '　背景 複雑'))
-        self.noise_warn.setVisible(score.noise_level(metrics['mean']) == 'extreme')
         self.set_metrics('before', metrics)
 
     def set_metrics(self, kind, metrics):
@@ -201,8 +204,17 @@ class InfoPanel(QFrame):
         self.noise_mean.set_values(get('before', 'mean'), get('after', 'mean'))
         self.noise_over.set_values(get('before', 'over'), get('after', 'over'))
         after = self._metrics['after']
+        self._sync_warn(after)
         self.ssim.set_value('—' if after is None else f"{after['ssim']:.3f}")
         if after is None:
             self.psnr.set_value('—')
         else:
             self.psnr.set_value('変化なし' if after['psnr'] is None else f"{after['psnr']:.1f} dB")
+
+    def _sync_warn(self, after):
+        """処理しても対象外の強さのノイズが残るときだけ、原因に合わせた注意を出す"""
+        left = after is not None and score.noise_level(after['mean']) == 'extreme'
+        if left:
+            cause = 'lines' if after['line_ratio'] > MOSTLY_LINES else 'strong'
+            self.noise_warn.set_content(NOISE_LEFT_TITLE, NOISE_LEFT_TEXT[cause])
+        self.noise_warn.setVisible(left)

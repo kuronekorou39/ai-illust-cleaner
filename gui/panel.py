@@ -15,7 +15,7 @@ DARK_MAX = 255
 GRAD_MAX = 400
 TOLERANCE_MAX = 64
 LINE_HELP = ('線と判断した部分は処理せず、元のまま残します。\n'
-             '暗さか輪郭の強さがしきい値を超えた画素を線とみなします。')
+             '暗くて細い部分と、輪郭の強い部分を線とみなします。')
 NOISE_HELP = ('ノイズの見え方だけを切り替えます。\n'
               '保存する画像や数値は変わりません。')
 CUTOUT_HELP = ('縁とつながった、縁と同じ色の部分を透明にします。\n'
@@ -97,7 +97,7 @@ class Panel(QFrame):
         # 線の保護
         self.dark = SliderRow('線とみなす暗さ', 0, DARK_MAX, DEFAULT_DARK)
         self.grad = SliderRow('線とみなす輪郭の強さ', 0, GRAD_MAX, DEFAULT_GRAD)
-        self.dark.setToolTip('これより暗い画素を線として残します')
+        self.dark.setToolTip('これより暗い細い部分を線として残します')
         self.grad.setToolTip('色の変わり方がこれより急な画素を線として残します')
         for row in (self.dark, self.grad):
             row.changed.connect(lambda _, r=row: self.changed.emit(r.slider.isSliderDown()))

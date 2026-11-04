@@ -133,6 +133,7 @@ class FullProcessor:
                 'mean': mean, 'over': over,
                 'ssim': ssim(a, b),
                 'psnr': psnr(a, b),   # 1画素も変わらなかった場合は None
+                'line_ratio': float((mask > 0.5).mean()),   # 線とみなして処理しなかった割合
             },
         }
 

@@ -21,15 +21,25 @@ from PIL import Image, PngImagePlugin
 
 
 DEFAULT_LAM = 0.002    # L0の強さ
-DEFAULT_DARK = 90      # 線とみなす暗さ（これより暗い画素）
+DEFAULT_DARK = 90      # 線とみなす暗さ（これより暗い細い部分）
 DEFAULT_GRAD = 120     # 線とみなす勾配の強さ
+LINE_MAX_WIDTH = 9     # 暗い部分のうち、これより太いものは線でなく塗りとみなす（画素）
+GRAD_PRESMOOTH = 3     # 勾配を測る前にノイズをならすメディアンの大きさ（ノイズを輪郭と間違えない）
 
 
 def line_mask(rgb, dark=DEFAULT_DARK, grad_th=DEFAULT_GRAD):
-    """線（暗い画素＋強い勾配）を検出し、0〜1の重みで返す"""
-    g = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
-    grad = cv2.magnitude(cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1))
-    m = ((g < dark) | (grad > grad_th)).astype(np.uint8)
+    """線を検出し、0〜1の重みで返す
+
+    線とみなすのは、暗い部分のうち細いもの（広い暗い面は塗りとして処理する）と、輪郭の強いところ。
+    輪郭の強さはノイズをならしてから測る（JPEG などの強いノイズを輪郭と間違えない）
+    """
+    g = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    smooth_g = cv2.medianBlur(g, GRAD_PRESMOOTH).astype(np.float32)
+    grad = cv2.magnitude(cv2.Sobel(smooth_g, cv2.CV_32F, 1, 0), cv2.Sobel(smooth_g, cv2.CV_32F, 0, 1))
+    dark_px = (g < dark).astype(np.uint8)
+    wide = cv2.morphologyEx(dark_px, cv2.MORPH_OPEN,
+                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (LINE_MAX_WIDTH, LINE_MAX_WIDTH)))
+    m = ((dark_px & (1 - wide)) | (grad > grad_th)).astype(np.uint8)
     m = cv2.dilate(m, np.ones((3, 3), np.uint8))               # アンチエイリアス部も保護
     return cv2.GaussianBlur(m.astype(np.float32), (3, 3), 0)   # 境目をなじませる
 

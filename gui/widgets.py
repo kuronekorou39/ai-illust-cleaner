@@ -79,6 +79,10 @@ class WarnNote(QWidget):
         lay.addWidget(self.body)
         self.body.hide()
 
+    def set_content(self, title, text):
+        self.head.setText(title)
+        self.body.setText(text)
+
     def reset(self):
         self.head.setChecked(False)
 
