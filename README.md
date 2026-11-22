@@ -1,5 +1,18 @@
 # ai-illust-cleaner
 
+[![Release](https://img.shields.io/github/v/release/kuronekorou39/ai-illust-cleaner)](https://github.com/kuronekorou39/ai-illust-cleaner/releases)
+![Windows](https://img.shields.io/badge/Windows-10_%2F_11-0078D4)
+[![License](https://img.shields.io/github/license/kuronekorou39/ai-illust-cleaner)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![PySide6](https://img.shields.io/badge/PySide6-Qt_6-41CD52?logo=qt&logoColor=white)
+![OpenCV](https://img.shields.io/badge/OpenCV-5C3EE8?logo=opencv&logoColor=white)
+![NumPy](https://img.shields.io/badge/NumPy-013243?logo=numpy&logoColor=white)
+![SciPy](https://img.shields.io/badge/SciPy-8CAAE6?logo=scipy&logoColor=white)
+![Pillow](https://img.shields.io/badge/Pillow-4B8BBE)
+![PyInstaller](https://img.shields.io/badge/PyInstaller-2B5B84)
+![uv](https://img.shields.io/badge/uv-DE5FE9?logo=uv&logoColor=white)
+![pytest](https://img.shields.io/badge/pytest-0A9EDC?logo=pytest&logoColor=white)
+
 ![ai-illust-cleaner](docs/banner.png)
 
 AI生成イラストのメタデータの確認、ノイズの可視化と除去、背景の透過ができる Windows 用のツール。
@@ -17,11 +30,19 @@ AI生成イラストのメタデータの確認、ノイズの可視化と除去
 
 ## 使い方
 
-1. 画像をウィンドウにドラッグ＆ドロップする（フォルダを落とすと一括処理）
-2. 左でメタデータとノイズの量を確かめ、右で処理の強さなどを調整する
-3. 左下の「保存」を押し、処理を反映するかと、削除するメタデータを選ぶ
+**1. 画像を取り込む**：起動した画面にドラッグ＆ドロップする（フォルダを落とすと一括処理）
 
-![画面](docs/main.png)
+![起動した画面](docs/usage_1_start.png)
+
+**2. 全体を確かめる**：左にメタデータとノイズの量が出る。中央は2分割や4分割で見比べられる
+
+![画像とノイズを並べた画面](docs/usage_2_open.png)
+
+**3. 拡大して比べる**：スライド比較で処理前後のノイズを見て、右で強さなどを調整する
+
+![目のあたりを拡大して処理前後のノイズを比べた画面](docs/usage_3_check.png)
+
+**4. 保存する**：左下の「保存」で、処理を反映するかと、削除するメタデータを選ぶ
 
 詳しい使い方は [docs/guide.md](docs/guide.md) にある。
 
@@ -32,15 +53,7 @@ AI生成イラストのメタデータの確認、ノイズの可視化と除去
 | メタデータ | PNG・JPEG・WebP の生成情報（A1111 / Forge・ComfyUI・NovelAI・InvokeAI）・EXIF・XMP・C2PA |
 | ノイズ除去 | PNG・JPEG・WebP など（塗りの細かな色ムラ。保存は PNG） |
 
-## 技術スタック
-
-| 用途 | 使っているもの |
-|---|---|
-| 言語 | Python 3.12 |
-| 画面 | PySide6（Qt 6） |
-| 画像処理 | OpenCV（contrib の L0 スムージングなど）・NumPy・SciPy・Pillow |
-| exe の作成 | PyInstaller |
-| 開発 | uv・pytest・GitHub Actions |
+## 開発
 
 開発の手順（起動・テスト・exe の作成・リリース）は [docs/development.md](docs/development.md) にある。
 
