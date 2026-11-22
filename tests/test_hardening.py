@@ -298,3 +298,112 @@ def test_save_dialog_names_the_real_format():
     Image.fromarray(tm._pixels()).save(buf, 'GIF')
     assert 'PNG' in SaveDialog(None, md.read_bytes(buf.getvalue()), True).original.text()
     assert 'PNG形式のまま' in SaveDialog(None, md.read_bytes(tm._png()), True).original.text()
+
+
+# ---------------------------------------------------------------- RGB への埋め込み
+
+def _stealth_rgb(size=64):
+    """拡張機能と同じ順（列ごとに上から、R・G・B）で印と本文を書き込んだ画像"""
+    rgb = np.full((size, size, 3), 200, np.uint8)
+    bits = np.unpackbits(np.frombuffer(md.STEALTH_RGB_MAGICS[0] + SECRET, np.uint8))
+    flat = rgb.transpose(1, 0, 2).reshape(-1)
+    flat[:len(bits)] = (flat[:len(bits)] & 0xFE) | bits
+    return flat.reshape(size, size, 3).transpose(1, 0, 2)
+
+
+def _lsb_text(rgb):
+    return np.packbits(rgb.transpose(1, 0, 2).reshape(-1) & 1).tobytes()
+
+
+def test_stealth_rgb_detected_and_removed_png():
+    buf = io.BytesIO()
+    Image.fromarray(_stealth_rgb()).save(buf, 'PNG')
+    meta = md.read_bytes(buf.getvalue())
+    assert meta.stealth == ('rgb',) and 'gen' in meta.groups()
+    after = _pixels(md.strip(buf.getvalue(), {'gen'}))[..., :3]
+    assert SECRET not in _lsb_text(after)
+    assert np.abs(after.astype(int) - _stealth_rgb().astype(int)).max() <= 1
+
+
+def test_stealth_rgb_kept_when_gen_is_not_removed():
+    buf = io.BytesIO()
+    Image.fromarray(_stealth_rgb()).save(buf, 'PNG')
+    assert np.array_equal(_pixels(md.strip(buf.getvalue(), {'other'}))[..., :3], _stealth_rgb())
+
+
+def test_stealth_rgb_removed_when_saving_processed(tmp_path):
+    src = tmp_path / 'a.png'
+    Image.fromarray(_stealth_rgb()).save(src)
+    meta, rgb, alpha = dn.load_image(src)
+    assert meta[md.STEALTH_INFO] == ('rgb',)
+    for name, save in (('x.png', lambda p: dn.save_clean(rgb, alpha, meta, p, {'gen'})),
+                       ('y.png', lambda p: dn.save_png(rgb, alpha, meta, p, strip_meta=True))):
+        save(tmp_path / name)
+        assert SECRET not in _lsb_text(_pixels((tmp_path / name).read_bytes())[..., :3])
+
+
+def test_scrub_keeps_black_and_white():
+    values = np.array([0, 1, 127, 128, 254, 255], np.uint8)
+    assert md.scrub_lsb(values).tolist() == [0, 0, 126, 129, 255, 255]
+
+
+def test_plain_image_is_not_reported_as_stealth():
+    assert md.read_bytes(tm._png()).stealth == ()
+
+
+# ---------------------------------------------------------------- 背景の透過
+
+def _outlined(width):
+    from scipy import ndimage
+    size = 120
+    inner = np.zeros((size, size), bool)
+    inner[30:90, 30:90] = True
+    line = ndimage.binary_dilation(inner, iterations=width) & ~inner
+    rgb = np.full((size, size, 3), 255, np.uint8)
+    rgb[inner] = (240, 200, 180)
+    rgb[line] = (20, 20, 20)
+    return rgb, inner, line
+
+
+@pytest.mark.parametrize('width', [1, 2, 3])
+def test_cutout_keeps_fill_inside_thin_outline(width):
+    from cleaner.cutout import cutout
+    rgb, inner, line = _outlined(width)
+    out, alpha, _ = cutout(rgb)
+    assert alpha[inner].min() == 255 and alpha[line].min() == 255
+    assert np.array_equal(out[inner], rgb[inner])
+    assert alpha[0, 0] == 0
+
+
+def test_cutout_still_softens_antialiased_edge():
+    from cleaner.cutout import cutout
+    rgb = np.full((64, 64, 3), 255, np.uint8)
+    rgb[16:48, 32:52] = 0
+    rgb[16:48, 31] = 128      # 白と黒の中間の画素
+    out, alpha, _ = cutout(rgb)
+    assert 90 < alpha[32, 31] < 160
+    assert alpha[32, 40] == 255 and alpha[32, 5] == 0
+    assert out[32, 31].max() < 30      # 背景の白の混ざりが取り除かれている
+
+
+def test_cutout_ignores_hidden_color_under_transparency():
+    from cleaner.cutout import cutout, merge_alpha
+    rgb, inner, line = _outlined(2)
+    existing = np.where(inner | line, 255, 0).astype(np.uint8)
+    rgb = rgb.copy()
+    rgb[existing == 0] = 0                 # 透明な部分の RGB は線と同じ黒
+    _, cut, _ = cutout(rgb, existing=existing)
+    merged = merge_alpha(cut, existing)
+    assert merged[line].min() == 255 and merged[inner].min() == 255
+    assert merged[0, 0] == 0
+
+
+def test_cutout_with_opaque_background_and_hidden_pixels():
+    from cleaner.cutout import cutout
+    rgb, inner, line = _outlined(2)
+    existing = np.full(rgb.shape[:2], 255, np.uint8)
+    existing[0, :8] = 0
+    rgb = rgb.copy()
+    rgb[0, :8] = 0
+    _, cut, _ = cutout(rgb, existing=existing)
+    assert cut[60, 5] == 0 and cut[inner].min() == 255 and cut[line].min() == 255

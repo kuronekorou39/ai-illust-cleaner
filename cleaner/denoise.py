@@ -14,8 +14,8 @@ import io
 from pathlib import Path
 
 from .cutout import DEFAULT_TOLERANCE, cutout, merge_alpha
-from .metadata import (MAX_PIXELS, MAX_SIDE_EQUIV, ORIENTATION, PNG_XMP_KEY, has_stealth, scrub_alpha, strip,
-                       write_atomic)
+from .metadata import (MAX_PIXELS, MAX_SIDE_EQUIV, ORIENTATION, PNG_XMP_KEY, STEALTH_INFO, scrub_stealth,
+                       stealth_kinds, strip, write_atomic)
 
 import cv2
 import numpy as np
@@ -87,7 +87,9 @@ def load_image(src):
             upright = Image.fromarray((np.asarray(upright).astype(np.uint32) >> 8).clip(0, 255).astype(np.uint8), 'L')
         rgba = np.asarray(upright.convert('RGBA'))
     alpha = rgba[..., 3] if has_alpha else None
-    return info, np.ascontiguousarray(rgba[..., :3]), alpha
+    rgb = np.ascontiguousarray(rgba[..., :3])
+    info[STEALTH_INFO] = stealth_kinds(rgb, alpha)   # 処理で印が崩れても、元にあったことを保存時に使う
+    return info, rgb, alpha
 
 
 def _upright(pil):
@@ -99,13 +101,14 @@ def _upright(pil):
     return ImageOps.exif_transpose(pil) if turned else pil
 
 
-def encode_png(out, alpha, meta, strip_meta=False):
+def encode_png(out, alpha, meta, strip_meta=False, scrub=False):
     """処理結果を PNG のバイト列にする。meta は load_image が返したメタデータ
     色の情報（ICCプロファイル）は見た目に関わるので strip_meta でも残すが、出力は RGB なので RGB 用のものに限る
+    strip_meta か scrub のとき、画素の最下位ビットに埋め込まれた生成情報も消す
     """
+    if strip_meta or scrub:
+        out, alpha = scrub_stealth(out, alpha, meta.get(STEALTH_INFO, ()))
     if alpha is not None:
-        if strip_meta and has_stealth(alpha):
-            alpha = scrub_alpha(alpha)
         out = np.dstack([out, alpha])
     info = PngImagePlugin.PngInfo()
     extra = {}
@@ -134,7 +137,7 @@ def save_clean(out, alpha, meta, dst, remove=()):
     """処理結果をPNGで保存し、remove（metadata.GROUPS のキー）の種類のメタデータを取り除く
     取り除いてからファイルに書く（途中で失敗しても、消すはずの情報が入ったファイルを残さない）
     """
-    data = encode_png(out, alpha, meta)
+    data = encode_png(out, alpha, meta, scrub='gen' in remove)
     write_atomic(dst, strip(data, set(remove)) if remove else data)
 
 
@@ -143,7 +146,7 @@ def process_file(src, dst, mode, lam, strip_meta, dark=DEFAULT_DARK, grad_th=DEF
     meta, rgb, alpha = load_image(src)
     out = clean(rgb, mode, lam, dark, grad_th)
     if transparent:   # ノイズを取って背景が平坦になった後の方が、きれいに抜ける
-        out, cut, _ = cutout(out, tolerance)
+        out, cut, _ = cutout(out, tolerance, existing=alpha)
         alpha = merge_alpha(cut, alpha)
     save_png(out, alpha, meta, dst, strip_meta)
     print(f'{src} -> {dst}')

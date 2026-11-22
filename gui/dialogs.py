@@ -217,7 +217,7 @@ class BatchThread(QThread):
                 meta, rgb, alpha = load_image(src)
                 out = clean(rgb, p.mode, p.lam, p.dark, p.grad)
                 if p.cutout:
-                    out, cut, _ = cutout(out, p.tolerance, p.holes)
+                    out, cut, _ = cutout(out, p.tolerance, p.holes, existing=alpha)
                     alpha = merge_alpha(cut, alpha)
                 save_png(out, alpha, meta, batch_output(self._out_dir, src), self._strip_meta)
                 ok += 1

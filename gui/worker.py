@@ -119,7 +119,7 @@ class FullProcessor:
         display = composite_on_white(result, src.alpha)
         alpha, view, tolerance = src.alpha, display, None
         if params.cutout:
-            result, cut, tolerance = cutout(result, params.tolerance, params.holes, params.toggles)
+            result, cut, tolerance = cutout(result, params.tolerance, params.holes, params.toggles, src.alpha)
             alpha = merge_alpha(cut, src.alpha)
             view = composite_on_checker(result, alpha)
         result_id = next(_result_ids)

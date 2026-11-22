@@ -48,7 +48,10 @@ MAX_TOTAL_TEXT = 32 * 2 ** 20  # 1ファイルで展開するテキストの合�
 MAX_XMP_PARSE = 2 * 2 ** 20    # XMP を項目に分けて表示する上限
 MAX_SIDE_EQUIV = 4096          # 開ける画像の大きさの上限を、正方形の一辺で表したもの
 MAX_PIXELS = MAX_SIDE_EQUIV ** 2   # 約1680万画素。8K では画面での処理に約9GBのメモリが要るため、ここで止める
-STEALTH_MAGICS = (b'stealth_pnginfo', b'stealth_pngcomp')   # アルファ値の最下位ビットに生成情報を埋める形式の印
+# 画素の最下位ビットに生成情報を埋める形式（stealth pnginfo）の印。ビットは列ごとに上から並ぶ
+STEALTH_MAGICS = (b'stealth_pnginfo', b'stealth_pngcomp')       # アルファ値に埋める形式
+STEALTH_RGB_MAGICS = (b'stealth_rgbinfo', b'stealth_rgbcomp')   # RGB に埋める形式
+STEALTH_INFO = '__stealth__'   # load_image が返す情報の中で、埋め込みのある場所を示すキー
 TEXT_OMITTED = '（読み取れないテキスト）'
 PngImagePlugin.MAX_TEXT_CHUNK = MAX_TEXT_BYTES   # Pillow の既定（1MB）では、長いワークフローの画像を開けない
 
@@ -89,7 +92,7 @@ class Metadata:
     has_color: bool = False  # ICCプロファイルなど、残す色の情報があるか
     text_groups: dict = field(default_factory=dict)   # PNGテキストのキー -> 種類（消去で使う）
     exif_has_gen: bool = False   # EXIF の中に生成情報があるか（EXIF を残して生成情報だけ消すとき書き換える）
-    stealth: bool = False        # アルファ値の最下位ビットに生成情報が埋め込まれているか
+    stealth: tuple = ()          # 画素の最下位ビットに生成情報が埋め込まれている場所（'alpha' / 'rgb'）
 
     def groups(self):
         """種類 -> 項目の並び（項目のある種類だけ、GROUPS の順）"""
@@ -145,9 +148,10 @@ def read_bytes(data):
         meta.gen = meta.gen or parse_generation(texts)
     except Exception:   # 形が想定と違っても「なし」にはせず、生成情報があることは示す
         meta.gen = GenInfo('不明なツール')
-    meta.stealth = _has_stealth_image(im)
-    if meta.stealth:
-        meta.entries.append(Entry('gen', 'アルファ値に埋め込まれた情報', '透明度の最下位ビットに書き込まれています'))
+    meta.stealth = _image_stealth(im)
+    for kind in meta.stealth:
+        name = '透明度' if kind == 'alpha' else 'RGB'
+        meta.entries.append(Entry('gen', f'{name}に埋め込まれた情報', f'{name}の最下位ビットに書き込まれています'))
     _read_unlisted(data, meta)
     return meta
 
@@ -255,7 +259,7 @@ def _text_group(key, meta):
 
 
 def has_stealth(alpha):
-    """アルファ値（2次元配列）の最下位ビットに、生成情報の印があるか。ビットは列ごとに上から並ぶ"""
+    """アルファ値（2次元配列）の最下位ビットに、生成情報の印があるか"""
     h, w = alpha.shape
     bits = len(STEALTH_MAGICS[0]) * 8
     if h * w < bits:
@@ -264,18 +268,46 @@ def has_stealth(alpha):
     return np.packbits(head).tobytes() in STEALTH_MAGICS
 
 
-def scrub_alpha(alpha):
-    """アルファ値の最下位ビットの情報を消す。完全な不透明と完全な透明は変わらない"""
-    return np.where(alpha >= 128, alpha | 1, alpha & 0xFE).astype(np.uint8)
-
-
-def _has_stealth_image(im):
-    if 'A' not in im.getbands() or im.width * im.height > MAX_PIXELS:
+def has_stealth_rgb(rgb):
+    """RGB（高さ×幅×3）の最下位ビットに、生成情報の印があるか。1画素に R・G・B の順で3ビット入る"""
+    h, w = rgb.shape[:2]
+    pixels = len(STEALTH_RGB_MAGICS[0]) * 8 // 3
+    if h * w < pixels:
         return False
+    head = rgb[:, :-(-pixels // h)].transpose(1, 0, 2).reshape(-1, 3)[:pixels].ravel() & 1
+    return np.packbits(head).tobytes() in STEALTH_RGB_MAGICS
+
+
+def stealth_kinds(rgb, alpha):
+    """生成情報が埋め込まれている場所を ('alpha', 'rgb') の形で返す"""
+    kinds = []
+    if alpha is not None and has_stealth(alpha):
+        kinds.append('alpha')
+    if rgb is not None and has_stealth_rgb(rgb):
+        kinds.append('rgb')
+    return tuple(kinds)
+
+
+def scrub_lsb(values):
+    """最下位ビットの情報を消す（変化は最大1階調）。0 と 255 は変わらないので、白や完全な透明は保たれる"""
+    return np.where(values >= 128, values | 1, values & 0xFE).astype(np.uint8)
+
+
+def scrub_stealth(rgb, alpha, kinds):
+    """kinds の場所の最下位ビットを消した (rgb, alpha) を返す"""
+    return (scrub_lsb(rgb) if 'rgb' in kinds else rgb,
+            scrub_lsb(alpha) if 'alpha' in kinds and alpha is not None else alpha)
+
+
+def _image_stealth(im):
+    if im.format == 'JPEG' or im.mode not in ('RGB', 'RGBA', 'LA') or im.width * im.height > MAX_PIXELS:
+        return ()
     try:
-        return has_stealth(np.asarray(im.getchannel('A')))
+        pixels = np.asarray(im)
+        return stealth_kinds(None if im.mode == 'LA' else pixels[..., :3],
+                             pixels[..., -1] if 'A' in im.getbands() else None)
     except Exception:   # 画素が壊れている
-        return False
+        return ()
 
 
 def _as_text(value):
@@ -758,12 +790,12 @@ def _png_raw(ctype, body):
     return body if ctype == _TRAILER else _png_chunk(ctype, body)
 
 
-def _scrub_png_alpha(data):
-    """アルファ値の最下位ビットの情報を消す。画像データだけを作り直し、ほかのチャンクは保つ"""
+def _scrub_png_pixels(data, kinds):
+    """画素の最下位ビットに埋め込まれた情報を消す。画像データだけを作り直し、ほかのチャンクは保つ"""
     with Image.open(io.BytesIO(data)) as im:
         im.load()
-        bands = list(im.split())
-        bands[-1] = Image.fromarray(scrub_alpha(np.asarray(bands[-1])))
+        bands = [Image.fromarray(scrub_lsb(np.asarray(band))) if ('alpha' if name == 'A' else 'rgb') in kinds else band
+                 for name, band in zip(im.getbands(), im.split())]
         buf = io.BytesIO()
         Image.merge(im.mode, bands).save(buf, 'PNG')
     fresh = list(_png_chunks(buf.getvalue()))
@@ -782,7 +814,7 @@ def _scrub_png_alpha(data):
 
 def _strip_png(data, remove, meta):
     if meta.stealth and 'gen' in remove:
-        data = _scrub_png_alpha(data)
+        data = _scrub_png_pixels(data, meta.stealth)
     out = [data[:8]]
     action = _exif_action(remove, meta)
     for ctype, body, kind in _png_blocks(data):
@@ -920,7 +952,7 @@ def _webp_chunk(fourcc, body):
 
 def _strip_webp(data, remove, meta):
     if meta.stealth and 'gen' in remove:
-        raise UnsupportedFormat('透明度に埋め込まれた生成情報は、WebP のままでは消せません。'
+        raise UnsupportedFormat('画素に埋め込まれた生成情報は、WebP のままでは消せません。'
                                 '「ノイズ除去と背景の透過を反映する」で PNG として保存してください。')
     action = _exif_action(remove, meta)
     chunks, trailer = [], b''

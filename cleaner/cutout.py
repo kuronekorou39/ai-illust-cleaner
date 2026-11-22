@@ -14,6 +14,7 @@ AUTO_MARGIN = 3           # 自動で決めるとき、背景のばらつきに�
 RING_WIDTH = 8            # 背景のばらつきを測る外周の幅（画素）
 COLOR_STEP = 8            # 背景色を推定するときの色の丸め幅
 UNIFORM_SHARE = 0.6      # 縁の画素のうち背景色がこの割合以上なら「単色の背景」とみなす
+OPAQUE_MIN = 128         # 元の透明度がこれ以上の画素だけを、見えている色として扱う
 HOLE_MIN_AREA = 0.001     # 穴とみなす囲まれた領域の最小面積（画像全体に対する割合）
 HOLE_COLOR_MARGIN = 1.5   # 穴とみなす領域の色が、外周のばらつきからずれてよい幅
 EDGE_WINDOW = 5          # 輪郭の不透明度を決めるとき、近くの前景の色を探す範囲（画素）
@@ -22,9 +23,17 @@ SEAL_GAP = 1             # 背景が通り抜けられない隙間の幅（片�
 THIN_CREEP_STEPS = 12    # 毛先の間などの細い入り江を奥へ辿る回数の上限
 
 
-def background_color(rgb):
-    """(縁の最頻色, 縁に占めるその色の割合) を返す"""
-    edge = np.concatenate([rgb[0], rgb[-1], rgb[:, 0], rgb[:, -1]]).astype(int)
+def _edge(a):
+    return np.concatenate([a[0], a[-1], a[:, 0], a[:, -1]])
+
+
+def background_color(rgb, existing=None):
+    """(縁の最頻色, 縁に占めるその色の割合) を返す。existing があれば、透明で見えていない色は数えない"""
+    edge = _edge(rgb).astype(int)
+    if existing is not None:
+        visible = _edge(existing) >= OPAQUE_MIN
+        if visible.any():
+            edge = edge[visible]
     q = (edge // COLOR_STEP) * COLOR_STEP + COLOR_STEP // 2
     colors, counts = np.unique(q, axis=0, return_counts=True)
     return colors[counts.argmax()].astype(np.uint8), float(counts.max() / len(edge))
@@ -68,19 +77,43 @@ def _outer_region(near):
     return reached.astype(bool)
 
 
-def cutout(rgb, tolerance=DEFAULT_TOLERANCE, holes=False, toggles=()):
+def _soft_band(remove, dist):
+    """半透明にしてよい輪郭の画素。背景から前景へ色差が増えていく範囲だけで、線の頂点を越えた内側は含まない
+
+    細い線のすぐ内側の淡い塗りは、線より色差が小さいので、ここで止めないと半透明になって欠ける
+    """
+    cross = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+    d = dist.astype(np.float32)
+    front = (cv2.dilate(remove.astype(np.uint8), cross) > 0) & ~remove
+    band = front.copy()
+    for _ in range(EDGE_WINDOW // 2):
+        prev = cv2.dilate(np.where(front, d, -1).astype(np.float32), cross)   # 隣の前線の、最大の色差
+        front = (prev >= 0) & ~band & ~remove & (d >= prev)
+        if not front.any():
+            break
+        band |= front
+    return band
+
+
+def cutout(rgb, tolerance=DEFAULT_TOLERANCE, holes=False, toggles=(), existing=None):
     """(背景色の混ざりを除いたRGB, アルファ 0〜255, 使った許容差) を返す
 
     tolerance: 背景色とみなす色の差。None なら自動で決める
     holes: 縁とつながっていない背景色の領域のうち、背景色と同じ色で大きいもの（腕と体の間など）も透明にする。
            白い胸など、背景色と同じ色の大きな塗りも消えるので、既定では使わない
     toggles: 透明にするかどうかを反転させる位置 (x, y) の並び。クリックで指定した例外
+    existing: 元画像のアルファ。透明な画素の RGB は見えていないので、背景色の判定に使わない
     """
-    bg, _ = background_color(rgb)
+    opaque = None if existing is None else existing >= OPAQUE_MIN
+    if opaque is not None and _edge(opaque).mean() < UNIFORM_SHARE:   # 背景はすでに透明で、消すものがない
+        return rgb.copy(), np.full(rgb.shape[:2], 255, np.uint8), AUTO_MIN if tolerance is None else tolerance
+    bg, _ = background_color(rgb, existing)
     dist = np.abs(rgb.astype(int) - bg.astype(int)).max(2)
     spread = _ring_spread(dist)
     if tolerance is None:
         tolerance = int(min(AUTO_MAX, max(AUTO_MIN, spread * 2 + AUTO_MARGIN)))
+    if opaque is not None:   # 透明な部分は背景とつながる
+        dist = np.where(opaque, dist, 0)
     near = (dist <= tolerance).astype(np.uint8)
 
     # 背景色の領域のうち、画像の縁からつながっている部分を背景とする。
@@ -108,7 +141,7 @@ def cutout(rgb, tolerance=DEFAULT_TOLERANCE, holes=False, toggles=()):
 
     # 背景に接する輪郭の画素は、近くの前景との色差に対する割合で不透明度を決める
     # （線と背景の中間色の画素なら、線の色が何割混ざっているかがそのまま不透明度になる）
-    band = ndimage.binary_dilation(remove, iterations=EDGE_WINDOW // 2 + 1) & ~remove
+    band = _soft_band(remove, dist)
     contrast = ndimage.maximum_filter(dist, size=EDGE_WINDOW)
     ratio = (dist - tolerance) / np.maximum(contrast - tolerance, 1)
     alpha = np.ones_like(dist, dtype=np.float32)
