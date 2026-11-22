@@ -63,7 +63,8 @@ def clean(rgb, mode='l0', lam=DEFAULT_LAM, dark=DEFAULT_DARK, grad_th=DEFAULT_GR
     return blend(rgb, smooth(rgb, mode, lam), line_mask(rgb, dark, grad_th))
 
 
-MAX_PIXELS = 40_000_000   # 開ける画像の大きさの上限（8K の約3300万画素まで）。処理の時間とメモリを抑える
+MAX_SIDE_EQUIV = 4096     # 開ける画像の大きさの上限を、正方形の一辺で表したもの
+MAX_PIXELS = MAX_SIDE_EQUIV ** 2   # 約1680万画素。8K では画面での処理に約9GBのメモリが要るため、ここで止める
 MIN_SIDE = 16             # 短い辺がこれ未満の画像は、ノイズの計算が成り立たない
 _GRAY16 = ('I;16', 'I;16B', 'I;16L', 'I')
 
@@ -75,7 +76,8 @@ def load_image(src):
     pil = Image.open(src)
     w, h = pil.size
     if w * h > MAX_PIXELS:
-        raise ValueError(f'画像が大きすぎます（{w}×{h}）。{MAX_PIXELS // 10_000:,}万画素まで開けます。')
+        raise ValueError(f'画像が大きすぎます（{w}×{h}）。'
+                         f'{MAX_SIDE_EQUIV}×{MAX_SIDE_EQUIV} と同じ画素数（約{MAX_PIXELS // 10_000:,}万画素）まで開けます。')
     if min(w, h) < MIN_SIDE:
         raise ValueError(f'画像が小さすぎます（{w}×{h}）。')
     info = dict(pil.info)

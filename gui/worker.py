@@ -1,6 +1,5 @@
 """裏で走る処理（全体処理・表示範囲だけのプレビュー処理）"""
 import threading
-import traceback
 from dataclasses import dataclass, field
 from itertools import count
 
@@ -9,8 +8,10 @@ from PySide6.QtCore import QThread, Signal
 
 from cleaner.common import psnr, ssim
 from cleaner.cutout import cutout, is_uniform_background, merge_alpha
-from cleaner.denoise import blend, line_mask, smooth
+from cleaner.denoise import blend, line_mask, load_image, smooth
+from cleaner import metadata as md
 from cleaner import noise
+from . import errors
 from .imaging import composite_on_checker, composite_on_white, noise_image, noise_view
 
 PREVIEW_PAD = 24         # プレビュー領域の外側に足す余白（端の影響を表示範囲に入れないため）
@@ -95,8 +96,8 @@ class LatestWorker(QThread):
                 self._busy = True
             try:
                 self.done.emit(self._fn(job))
-            except Exception:
-                self.failed.emit(traceback.format_exc())
+            except Exception as e:   # 例外は文にしてから渡す（例外が抱える大きな配列を残さない）
+                self.failed.emit(errors.details(e))
 
 
 class FullProcessor:
@@ -173,6 +174,16 @@ class PreviewProcessor:
             'display': display[inner], 'noise': noise_image(display, noise_key)[inner] if spatial else None,
             'mask': mask[inner],
         }
+
+
+def load_source(path):
+    """画像を読み込む。大きい画像や壊れたファイルで画面が止まらないよう、裏で実行する"""
+    meta, rgb, alpha = load_image(path)
+    try:
+        info = md.read(path)
+    except Exception:   # メタデータが壊れていても、画像は開けるようにする
+        info = md.Metadata()
+    return Source(str(path), rgb, alpha, meta, info)
 
 
 def analyze_source(job):

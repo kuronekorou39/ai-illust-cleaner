@@ -1,6 +1,6 @@
 """メインウィンドウ"""
-import traceback
 from dataclasses import replace
+from itertools import count
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
@@ -8,8 +8,8 @@ from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QMainWindow, QM
                                QScrollArea, QVBoxLayout, QWidget)
 
 from cleaner import metadata as md
-from cleaner.denoise import load_image, save_clean, save_png
-from . import __version__, icons, theme
+from cleaner.denoise import save_clean, save_png
+from . import __version__, errors, icons, theme
 from .dialogs import BATCH_SUFFIX, BatchDialog, MetaDialog, SaveDialog
 from .imaging import NOISE_CACHE, composite_on_checker, mask_to_qimage, to_qimage
 from .info import InfoPanel
@@ -17,8 +17,8 @@ from .panel import Panel
 from .viewer import Viewer
 from .widgets import button, label
 from .winchrome import apply_dark_titlebar
-from .worker import (FullProcessor, LatestWorker, PreviewProcessor, Source, analyze_source,
-                     clamp_preview_rect, render_algos, render_noise)
+from .worker import (FullProcessor, LatestWorker, PreviewProcessor, analyze_source, clamp_preview_rect,
+                     load_source, render_algos, render_noise)
 
 APP_NAME = 'ai-illust-cleaner'
 NO_META_SUFFIX = '_nometa'   # 元の画像のまま、メタデータだけ消して保存するときの既定のファイル名の末尾
@@ -26,23 +26,25 @@ IMAGE_SUFFIXES = ('.png', '.jpg', '.jpeg', '.jfif', '.jpe', '.webp', '.bmp', '.g
 OPEN_FILTER = ('画像 (' + ' '.join(f'*{s}' for s in IMAGE_SUFFIXES) + ');;すべてのファイル (*)')
 FULL_DEBOUNCE_MS = 250    # スライダー操作が止まってから全体処理を始めるまでの待ち
 STATUS_SHOW_MS = 6000     # 保存完了などの一時的なメッセージを出しておく時間
+LARGE_PIXELS = 6_000_000  # これより大きい画像は、全体の処理に時間がかかる旨を処理中に出す
+LARGE_NOTICE = '大きな画像のため、全体の処理に時間がかかります'
 
 
 class Task(QThread):
-    """関数を1回だけ裏で実行する"""
+    """関数を1回だけ裏で実行する。失敗したら、例外を describe で文にして渡す"""
     done = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, fn, arg, parent):
+    def __init__(self, fn, arg, parent, describe=errors.details):
         super().__init__(parent)
-        self._fn, self._arg = fn, arg
+        self._fn, self._arg, self._describe = fn, arg, describe
         self.finished.connect(self.deleteLater)
 
     def run(self):
         try:
             self.done.emit(self._fn(self._arg))
-        except Exception:
-            self.failed.emit(traceback.format_exc())
+        except Exception as e:
+            self.failed.emit(self._describe(e))
 
 
 class MainWindow(QMainWindow):
@@ -62,6 +64,9 @@ class MainWindow(QMainWindow):
         self._analyzing = 0         # 実行中の指標計算の数
         self._toggles = ()          # 透過をクリックで反転させた位置（画像ごと）
         self._smoothed = (None, None)   # (条件, 平滑化結果)。プレビューで使い回す
+        self._tasks = set()         # 実行中の Task（閉じるときに終わるのを待つ）
+        self._load_ids = count(1)
+        self._loading = None        # 最後に頼んだ読み込みの番号（古い読み込みの結果は捨てる）
 
         self.viewer = Viewer()
         self.info_panel = InfoPanel()
@@ -160,6 +165,8 @@ class MainWindow(QMainWindow):
         self.save_btn.setVisible(has)
         self.save_btn.setEnabled(has)
         self.viewer.set_busy(self._awaiting or self._analyzing > 0)
+        large = has and self.source.rgb.shape[0] * self.source.rgb.shape[1] > LARGE_PIXELS
+        self.viewer.set_notice(LARGE_NOTICE if large and self._awaiting else None)
 
     def _say(self, text):
         self.status.setText(text)
@@ -176,22 +183,20 @@ class MainWindow(QMainWindow):
         if path:
             self.open_image(path)
 
-    def _load(self, path):
-        try:
-            meta, rgb, alpha = load_image(path)
-        except Exception as e:
-            QMessageBox.warning(self, APP_NAME, f'画像を開けませんでした。\n{path}\n\n{e}')
-            return None
-        try:
-            info = md.read(path)
-        except Exception:   # メタデータが壊れていても、画像は開けるようにする
-            info = md.Metadata()
-        return Source(str(path), rgb, alpha, meta, info)
-
     def open_image(self, path):
-        src = self._load(path)
-        if src is None:
-            return
+        """裏で読み込み、読めたら表示する。大きい画像や壊れたファイルでも画面は止まらない"""
+        load_id = self._loading = next(self._load_ids)
+        self._run_task(load_source, path, lambda src: self._on_loaded(load_id, src),
+                       lambda msg: self._on_load_failed(load_id, path, msg), errors.summary)
+
+    def _on_load_failed(self, load_id, path, msg):
+        if load_id == self._loading:
+            QMessageBox.warning(self, APP_NAME, f'画像を開けませんでした。\n{path}\n\n{msg}')
+
+    def _on_loaded(self, load_id, src):
+        if load_id != self._loading:
+            return   # 読み込み中に別の画像が開かれた
+        path = src.path
         self.source = src
         self.result = None
         NOISE_CACHE.clear()   # 前の画像のノイズは使わない
@@ -210,18 +215,17 @@ class MainWindow(QMainWindow):
         self._run_task(analyze_source, (src, self.panel.noise_key()), self._on_analysis)
         self._on_params(False)   # 開いたらすぐノイズ除去する
 
-    def _run_task(self, fn, arg, on_done):
-        task = Task(fn, arg, self)
+    def _run_task(self, fn, arg, on_done, on_failed=None, describe=errors.details):
+        task = Task(fn, arg, self, describe)
+        self._tasks.add(task)
+        task.finished.connect(lambda: self._tasks.discard(task))
         task.done.connect(on_done)
         task.done.connect(self._on_task_done)
-        task.failed.connect(self._on_task_failed)
+        task.failed.connect(self._on_task_done)
+        task.failed.connect(on_failed or self._show_error)
         self._analyzing += 1
         self._sync_enabled()
         task.start()
-
-    def _on_task_failed(self, trace):
-        self._on_task_done(None)
-        self._show_error(trace)
 
     def _on_task_done(self, _):
         self._analyzing -= 1
@@ -360,8 +364,10 @@ class MainWindow(QMainWindow):
         self._sync_enabled()
         self._show_error(trace)
 
-    def _show_error(self, trace):
-        QMessageBox.warning(self, APP_NAME, f'処理中にエラーが起きました。\n\n{trace}')
+    def _show_error(self, text):
+        if text != errors.OUT_OF_MEMORY:
+            text = f'処理中にエラーが起きました。\n\n{text}'
+        QMessageBox.warning(self, APP_NAME, text)
 
     # ---- 保存・一括処理・メタデータ ----
 
@@ -427,4 +433,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e):
         self.full.stop()
         self.preview.stop()
+        for task in tuple(self._tasks):
+            task.wait()
         super().closeEvent(e)

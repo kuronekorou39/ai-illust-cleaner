@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDialog, Q
 from cleaner import metadata as md
 from cleaner.cutout import cutout, merge_alpha
 from cleaner.denoise import clean, load_image, save_png
+from .errors import summary as error_summary
 from .widgets import Segmented, button, label
 from .winchrome import apply_dark_titlebar
 
@@ -202,7 +203,7 @@ class BatchThread(QThread):
                 save_png(out, alpha, meta, self._out_dir / f'{src.stem}{BATCH_SUFFIX}.png', self._strip_meta)
                 ok += 1
             except Exception as e:
-                errors.append(f'{src.name}: {e}')
+                errors.append(f'{src.name}: {error_summary(e)}')
             self.progress.emit(i + 1, src.name)
         self.finished_all.emit(ok, errors)
 

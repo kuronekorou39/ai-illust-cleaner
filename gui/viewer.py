@@ -1,4 +1,4 @@
-"""比較ビュー（スライド比較・4分割・抽出方式の4通り比較、拡大と移動）"""
+"""比較ビュー（スライド比較・2分割・4分割・抽出方式の4通り比較、拡大と移動）"""
 import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
@@ -29,6 +29,14 @@ GRID_LAYERS = {
     'quad': ('orig', 'result', 'noise_orig', 'noise_result'),
     'algos': tuple(ALGO_LAYERS),
 }
+# 2分割で並べる組（キー, ボタンの文字, 並べるレイヤー）
+PAIRS = (
+    ('orig_noise', '元とノイズ', ('orig', 'noise_orig')),
+    ('result_noise', '処理後とノイズ', ('result', 'noise_result')),
+    ('images', '画像の前後', ('orig', 'result')),
+    ('noises', 'ノイズの前後', ('noise_orig', 'noise_result')),
+)
+PAIR_LAYERS = {key: layers for key, _, layers in PAIRS}
 LABELS = {'orig': '元画像', 'result': '処理後', 'noise_orig': 'ノイズ（元画像）', 'noise_result': 'ノイズ（処理後）',
           **{layer: noise.ALGOS[k][0] for layer, k in ALGO_LAYERS.items()}}
 AFTER_LAYERS = ('result', 'noise_result')
@@ -57,6 +65,8 @@ class Viewer(QWidget):
         self._thumb = None
         self.mode = 'quad'
         self.compare_mode = 'quad'   # 4通りの比較を閉じたときに戻る表示
+        self.pair = PAIRS[0][0]      # 2分割で並べる組
+        self._notice = None          # 中央下に出しておく知らせ（大きな画像の処理中など）
         self.noise_style = 'strength'
         self.current_algo = next(iter(noise.ALGOS))
         self._press_at = None        # クリックとドラッグを見分けるための、押した位置
@@ -71,9 +81,10 @@ class Viewer(QWidget):
         self._cursor = None   # 画像上のカーソル位置
         self.pick_mode = False   # クリックした場所を通知するモード（透過の切り替え用）
 
-        self.mode_seg = Segmented([('slide', 'スライド比較'), ('quad', '4分割')], floating=True)
+        self.mode_seg = Segmented([('slide', 'スライド比較'), ('pair', '2分割'), ('quad', '4分割')], floating=True)
         self.view_seg = Segmented([('image', '画像'), ('noise', 'ノイズ')], floating=True)
-        for seg, width in ((self.mode_seg, 220), (self.view_seg, 160)):
+        self.pair_seg = Segmented([(key, text) for key, text, _ in PAIRS], floating=True)
+        for seg, width in ((self.mode_seg, 280), (self.view_seg, 160), (self.pair_seg, 400)):
             seg.setParent(self)
             seg.setFixedSize(width, 40)
             seg.setCursor(Qt.ArrowCursor)
@@ -84,6 +95,7 @@ class Viewer(QWidget):
         self.mode_seg.set_value(self.compare_mode)
         self.mode_seg.changed.connect(self.set_mode)
         self.view_seg.changed.connect(self.set_view)
+        self.pair_seg.changed.connect(self.set_pair)
         self._overlay_bottom = 0   # 上部の切り替えボタンの下端と左端（ラベルと重ならないようにするため）
         self._overlay_left = 0
 
@@ -145,6 +157,16 @@ class Viewer(QWidget):
         self._sync_overlays()
         self.update()
 
+    def set_pair(self, pair):
+        self.pair = pair
+        self.pair_seg.set_value(pair)
+        self.update()
+
+    def set_notice(self, text):
+        if text != self._notice:
+            self._notice = text
+            self.update()
+
     def set_noise(self, algo, style):
         self.current_algo, self.noise_style = algo, style
         self.update()
@@ -174,15 +196,20 @@ class Viewer(QWidget):
     def _sync_overlays(self):
         self.mode_seg.setVisible(self.has_image() and self.mode != 'algos')
         self.view_seg.setVisible(self.has_image() and self.mode == 'slide')
+        self.pair_seg.setVisible(self.has_image() and self.mode == 'pair')
         self.zoom_bar.adjustSize()
         self.zoom_bar.setVisible(self.has_image())
         self._place_overlays()
 
     def _place_overlays(self):
-        """上部中央に横一列で並べる。入りきらなければ2段にする"""
-        widgets = [w for w in (self.mode_seg, self.view_seg, self.zoom_bar) if w.isVisibleTo(self)]
+        """上部中央に横に並べる。入りきらない分は次の段に送る"""
+        widgets = [w for w in (self.mode_seg, self.view_seg, self.pair_seg, self.zoom_bar) if w.isVisibleTo(self)]
         span = lambda ws: sum(w.width() for w in ws) + OVERLAY_GAP * max(0, len(ws) - 1)
-        rows = [widgets] if span(widgets) <= self.width() - 2 * OVERLAY_MARGIN else [[w] for w in widgets]
+        rows = [[]]
+        for w in widgets:
+            if rows[-1] and span(rows[-1] + [w]) > self.width() - 2 * OVERLAY_MARGIN:
+                rows.append([])
+            rows[-1].append(w)
         y = OVERLAY_TOP
         self._overlay_bottom = 0
         self._overlay_left = self.width()
@@ -199,12 +226,36 @@ class Viewer(QWidget):
 
     # ---- 拡大と移動 ----
 
+    def _grid_layers(self):
+        return PAIR_LAYERS[self.pair] if self.mode == 'pair' else GRID_LAYERS[self.mode]
+
+    def _content_top(self):
+        """画像を並べる領域の上端。並べるモードでは、上部の切り替えボタンと画像が重ならないよう、その下から始める"""
+        return 0 if self.mode == 'slide' else self._overlay_bottom + OVERLAY_GAP
+
+    def _pair_stacked(self):
+        """2分割を上下に並べるか。画像が大きく見える方を選ぶ"""
+        if not self.has_image():
+            return False
+        w, h = self.width(), self.height() - self._content_top()
+        iw, ih = self._size
+        side = min((w - CELL_GAP) / 2 / iw, h / ih)
+        stacked = min(w / iw, (h - CELL_GAP) / 2 / ih)
+        return stacked > side
+
     def _cells(self):
-        w, h = self.width(), self.height()
+        top = self._content_top()
+        w, h = self.width(), self.height() - top
         if self.mode == 'slide':
             return [QRectF(0, 0, w, h)]
+        if self.mode == 'pair':
+            if self._pair_stacked():
+                ch = (h - CELL_GAP) / 2
+                return [QRectF(0, top, w, ch), QRectF(0, top + ch + CELL_GAP, w, ch)]
+            cw = (w - CELL_GAP) / 2
+            return [QRectF(0, top, cw, h), QRectF(cw + CELL_GAP, top, cw, h)]
         cw, ch = (w - CELL_GAP) / 2, (h - CELL_GAP) / 2
-        return [QRectF(x, y, cw, ch) for y in (0, ch + CELL_GAP) for x in (0, cw + CELL_GAP)]
+        return [QRectF(x, top + y, cw, ch) for y in (0, ch + CELL_GAP) for x in (0, cw + CELL_GAP)]
 
     def _cell_at(self, pos):
         for cell in self._cells():
@@ -409,6 +460,11 @@ class Viewer(QWidget):
             p.setRenderHint(QPainter.Antialiasing)
             self._chip(p, 'プレビュー（全体を処理中）', QPointF(self.width() - OVERLAY_MARGIN, self.height() - OVERLAY_MARGIN),
                        theme.MUTED, right_aligned=True, bottom=True)
+        if self._notice and self.has_image():
+            p.setRenderHint(QPainter.Antialiasing)
+            # 上部の切り替えボタンの下、中央に出す（下の隅はラベルやプレビューの表示が使う）
+            self._chip(p, self._notice, QPointF(self.width() / 2, self._overlay_bottom + OVERLAY_GAP),
+                       theme.ACCENT, centered=True)
         if self._busy:
             self._paint_busy(p)
         p.end()
@@ -488,8 +544,9 @@ class Viewer(QWidget):
         self._paint_minimap(p)
 
     def _paint_grid(self, p):
-        p.fillRect(self.rect(), QColor(theme.BORDER))
-        for cell, name in zip(self._cells(), GRID_LAYERS[self.mode]):
+        top = self._content_top()
+        p.fillRect(QRectF(0, top, self.width(), self.height() - top), QColor(theme.BORDER))   # 画面の間の線
+        for cell, name in zip(self._cells(), self._grid_layers()):
             p.fillRect(cell, QColor(theme.CANVAS))
             self._draw_layer(p, cell, cell, name)
             spectrum = _is_noise(name) and self.noise_style == 'spectrum'
@@ -511,15 +568,15 @@ class Viewer(QWidget):
             p.setRenderHint(QPainter.Antialiasing, False)
         if self.mode == 'algos':
             p.setRenderHint(QPainter.Antialiasing)
-            self._chip(p, 'クリックで抽出方式を選ぶ', QPointF(OVERLAY_MARGIN, OVERLAY_MARGIN), theme.ACCENT)
+            self._chip(p, 'クリックで抽出方式を選ぶ', QPointF(OVERLAY_MARGIN, top + OVERLAY_MARGIN), theme.ACCENT)
 
-    def _chip(self, p, text, anchor, color, right_aligned=False, bottom=False):
+    def _chip(self, p, text, anchor, color, right_aligned=False, bottom=False, centered=False):
         font = QFont(theme.FONT_UI, 9)
         font.setWeight(QFont.Medium)
         p.setFont(font)
         tw = p.fontMetrics().horizontalAdvance(text)
         w, h = tw + 20, 26
-        x = anchor.x() - w if right_aligned else anchor.x()
+        x = anchor.x() - w if right_aligned else anchor.x() - w / 2 if centered else anchor.x()
         y = anchor.y() - h if bottom else anchor.y()
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(*theme.CHIP_BG))
