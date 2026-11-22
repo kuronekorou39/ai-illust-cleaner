@@ -109,7 +109,8 @@ class SaveDialog(_Dialog):
         self._meta = meta
 
         self.apply = QRadioButton('ノイズ除去と背景の透過を反映する（PNG で保存）')
-        self.original = QRadioButton(f'元の画像のまま（{meta.format or "元の"}形式のまま、画素も変えない）')
+        self.original = QRadioButton(f'元の画像のまま（{meta.format}形式のまま、画素も変えない）' if meta.strippable
+                                     else '元の画像のまま（PNG で保存し直す）')
         group = QButtonGroup(self)
         for b in (self.apply, self.original):
             b.setCursor(Qt.PointingHandCursor)

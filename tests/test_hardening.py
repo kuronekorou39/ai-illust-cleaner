@@ -288,3 +288,13 @@ def test_save_dialog_does_not_carry_over_to_new_groups(tmp_path):
     meta = md.read_bytes(tm._png({'parameters': tm.A1111, 'Title': 't'}))
     dlg = SaveDialog(None, meta, True, True, frozenset({'other'}))   # 前回「その他」だけ残すと選んだ
     assert dlg.selected() == {'gen'}
+
+
+def test_save_dialog_names_the_real_format():
+    from PySide6.QtWidgets import QApplication
+    from gui.dialogs import SaveDialog
+    QApplication.instance() or QApplication([])
+    buf = io.BytesIO()
+    Image.fromarray(tm._pixels()).save(buf, 'GIF')
+    assert 'PNG' in SaveDialog(None, md.read_bytes(buf.getvalue()), True).original.text()
+    assert 'PNG形式のまま' in SaveDialog(None, md.read_bytes(tm._png()), True).original.text()
