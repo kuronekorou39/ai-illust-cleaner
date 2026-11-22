@@ -1,6 +1,6 @@
 [project]
 name = "ai-illust-cleaner"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI生成イラストのメタデータ確認、ノイズの可視化・除去、背景の透過を行うツール"
 readme = "README.md"
 requires-python = ">=3.11"
