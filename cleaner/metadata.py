@@ -7,21 +7,24 @@
 """
 import io
 import json
+import os
 import re
 import struct
+import tempfile
 import xml.etree.ElementTree as ET
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PIL import ExifTags, Image
+import numpy as np
+from PIL import ExifTags, Image, PngImagePlugin
 
 GROUPS = {
     'gen': ('生成情報', 'プロンプト・シード値・モデル名など、生成ツールが書き込む情報です。'),
     'exif': ('EXIF', '作成ソフト・日時・作者・撮影機器・位置情報などの標準的な情報です。'),
     'xmp': ('XMP', 'Photoshop などの編集ソフトが書き込む情報です。作者や編集履歴、AI生成の印が入ることもあります。'),
     'c2pa': ('C2PA', '画像の出どころを証明する、署名付きの情報（コンテンツクレデンシャル）です。'),
-    'other': ('その他', 'タイトル・作者・コメント・IPTC など、上記以外の情報です。'),
+    'other': ('その他', 'タイトル・作者・コメント・IPTC・解釈できないデータなど、上記以外の情報です。'),
 }
 STRIPPABLE_FORMATS = ('PNG', 'JPEG', 'WEBP')   # ファイルの該当部分だけを取り除けるもの
 
@@ -36,13 +39,22 @@ RAW_PROFILE_GROUPS = {'Raw profile type exif': 'exif', 'Raw profile type APP1': 
 
 EXIF_IFD, GPS_IFD = 0x8769, 0x8825
 USER_COMMENT, IMAGE_DESCRIPTION = 0x9286, 0x010E
+MAKE, MODEL, ORIENTATION = 0x010F, 0x0110, 0x0112   # 向きは表示に必要なので、EXIF を消しても残す
+EXIF_GEN_PREFIXES = ('prompt:', 'workflow:')        # ComfyUI が WebP の Make / Model に書き込む形式
 AI_SOURCE_TYPES = ('trainedAlgorithmicMedia', 'compositeWithTrainedAlgorithmicMedia')   # IPTC の「AI生成」の区分
 PREVIEW_CHARS = 2000   # すべての項目の一覧で、長い値を切り詰める長さ
 MAX_TEXT_BYTES = 8 * 2 ** 20   # 圧縮されたテキストを展開する上限（小さなファイルが巨大に膨らむ細工に備える）
+MAX_TOTAL_TEXT = 32 * 2 ** 20  # 1ファイルで展開するテキストの合計の上限
 MAX_XMP_PARSE = 2 * 2 ** 20    # XMP を項目に分けて表示する上限
+MAX_SIDE_EQUIV = 4096          # 開ける画像の大きさの上限を、正方形の一辺で表したもの
+MAX_PIXELS = MAX_SIDE_EQUIV ** 2   # 約1680万画素。8K では画面での処理に約9GBのメモリが要るため、ここで止める
+STEALTH_MAGICS = (b'stealth_pnginfo', b'stealth_pngcomp')   # アルファ値の最下位ビットに生成情報を埋める形式の印
+TEXT_OMITTED = '（読み取れないテキスト）'
+PngImagePlugin.MAX_TEXT_CHUNK = MAX_TEXT_BYTES   # Pillow の既定（1MB）では、長いワークフローの画像を開けない
 
 # A1111 の設定の行「Steps: 20, Sampler: Euler a, ...」の1項目（値は引用符で囲まれていることがある）
-_A1111_SETTING = re.compile(r'\s*([\w \-/().]+?):\s*("(?:\\.|[^\\"])*"|[^,]*)(?:,|$)')
+_A1111_KEY = re.compile(r'[\w \-/().]+')
+_A1111_QUOTED = re.compile(r'"(?:\\.|[^\\"])*"')
 _SETTING_NAMES = {   # 表示名をそろえる。ここに無い設定は元の名前のまま出す
     'seed': 'シード値', 'noise_seed': 'シード値', 'steps': 'ステップ数', 'sampler': 'サンプラー',
     'sampler_name': 'サンプラー', 'scheduler': 'スケジューラ', 'schedule type': 'スケジューラ',
@@ -77,6 +89,7 @@ class Metadata:
     has_color: bool = False  # ICCプロファイルなど、残す色の情報があるか
     text_groups: dict = field(default_factory=dict)   # PNGテキストのキー -> 種類（消去で使う）
     exif_has_gen: bool = False   # EXIF の中に生成情報があるか（EXIF を残して生成情報だけ消すとき書き換える）
+    stealth: bool = False        # アルファ値の最下位ビットに生成情報が埋め込まれているか
 
     def groups(self):
         """種類 -> 項目の並び（項目のある種類だけ、GROUPS の順）"""
@@ -103,12 +116,16 @@ def read_bytes(data):
     info = im.info
     meta.has_color = bool(info.get('icc_profile')) or 'srgb' in info or 'gamma' in info
 
-    texts = png_texts(data) if meta.format == 'PNG' else {}
-    meta.text_groups = classify_png_texts(texts)
-    for k, v in texts.items():
+    items = png_text_items(data) if meta.format == 'PNG' else []
+    texts = _first_texts(items)
+    meta.text_groups = classify_png_texts(items)
+    for k, v in items:
         meta.entries.append(Entry(meta.text_groups[k], k, v))
 
-    _read_exif(im, meta)
+    try:
+        _read_exif(im, meta)
+    except Exception:   # 読めない EXIF も、下の _read_unlisted で項目として出す
+        pass
     xmp = texts.get(PNG_XMP_KEY) or _as_text(info.get('xmp'))
     if xmp and meta.format != 'PNG':
         meta.entries.append(Entry('xmp', 'XMP', xmp))
@@ -124,54 +141,141 @@ def read_bytes(data):
     if c2pa is not None:
         meta.entries.append(Entry('c2pa', 'マニフェスト', c2pa))
 
-    meta.gen = meta.gen or parse_generation(texts)
+    try:
+        meta.gen = meta.gen or parse_generation(texts)
+    except Exception:   # 形が想定と違っても「なし」にはせず、生成情報があることは示す
+        meta.gen = GenInfo('不明なツール')
+    meta.stealth = _has_stealth_image(im)
+    if meta.stealth:
+        meta.entries.append(Entry('gen', 'アルファ値に埋め込まれた情報', '透明度の最下位ビットに書き込まれています'))
+    _read_unlisted(data, meta)
     return meta
 
 
-def _inflate(data):
-    """zlib で圧縮されたデータを、MAX_TEXT_BYTES まで展開する"""
-    return zlib.decompressobj().decompress(data, MAX_TEXT_BYTES)
+def unreadable(path):
+    """メタデータを解析できなかった画像。「なし」と見せず、すべての種類を消せるようにする"""
+    try:
+        with Image.open(path) as im:
+            fmt = im.format or ''
+    except Exception:
+        fmt = ''
+    entries = [Entry(g, '読み取れなかったデータ', '') for g in ('gen', 'exif', 'xmp', 'other')]
+    return Metadata(format=fmt, entries=entries)
 
 
-def png_texts(data):
-    """PNG のテキスト（tEXt / zTXt / iTXt）をキー -> 値で返す。画像データの後ろにあるものも含む
-    途中でファイルが壊れていたら、そこまでに読めたものを返す
+def _read_unlisted(data, meta):
+    """解釈できなかったブロックも項目にする（表示されないものは、消す対象に選べないため）"""
+    def listed(marker):
+        return (marker == 0xFE and im_info.get('comment')) or (marker == 0xED and im_info.get('photoshop'))
+
+    im_info = Image.open(io.BytesIO(data)).info if meta.format == 'JPEG' else {}
+    if meta.format == 'JPEG':
+        blocks = ((None if listed(m) else _jpeg_kind(m, b), b) for m, b in _safe(_jpeg_segments(data)))
+    else:
+        blocks = _safe(_iter_blocks(data, meta.format))
+    shown = set(meta.groups())
+    sizes = {}
+    for kind, body in blocks:
+        if kind is None or (kind == 'exif' and _only_orientation(body)):
+            continue
+        sizes[kind] = sizes.get(kind, 0) + len(body)
+    for kind, size in sizes.items():
+        if kind == 'other' or kind not in shown:
+            meta.entries.append(Entry(kind, 'そのほかのデータ', f'{size:,} バイト'))
+
+
+def _inflate(data, limit=MAX_TEXT_BYTES):
+    """zlib で圧縮されたデータを、limit まで展開する"""
+    return zlib.decompressobj().decompress(data, limit)
+
+
+def png_text_items(data):
+    """PNG のテキスト（tEXt / zTXt / iTXt）を (キー, 値) の並びで返す。画像データの後ろにあるものも含む
+    途中でファイルが壊れていたら、そこまでに読めたものを返す。展開する量は合計でも MAX_TOTAL_TEXT まで
     """
-    texts = {}
+    items, budget = [], MAX_TOTAL_TEXT
     for ctype, body in _safe(_png_chunks(data)):
-        if ctype not in (b'tEXt', b'zTXt', b'iTXt'):
+        if ctype not in _PNG_TEXT:
             continue
         key, _, rest = body.partition(b'\x00')
+        limit = min(MAX_TEXT_BYTES, budget)
         try:
             if ctype == b'tEXt':
                 value = rest.decode('latin-1')
             elif ctype == b'zTXt':
-                value = _inflate(rest[1:]).decode('latin-1')
+                raw = _inflate(rest[1:], limit) if limit > 0 else None
+                value = TEXT_OMITTED if raw is None else raw.decode('latin-1')
+                budget -= len(raw or b'')
             else:
                 compressed, rest = rest[0], rest[2:]
                 _lang, _, rest = rest.partition(b'\x00')
                 _translated, _, rest = rest.partition(b'\x00')
-                value = (_inflate(rest) if compressed else rest).decode('utf-8', 'replace')
+                raw = rest if not compressed else _inflate(rest, limit) if limit > 0 else None
+                value = TEXT_OMITTED if raw is None else raw.decode('utf-8', 'replace')
+                budget -= len(raw or b'') if compressed else 0
         except (zlib.error, IndexError):
-            continue
-        texts.setdefault(key.decode('latin-1'), value)
+            value = TEXT_OMITTED
+        items.append((key.decode('latin-1'), value))
+    return items
+
+
+def _first_texts(items):
+    """キー -> 値。同じキーが並ぶときは先頭を使うが、生成情報の JSON があればそちらを優先する"""
+    texts = {}
+    for k, v in items:
+        if k not in texts or (k == 'Comment' and _json_with(v, 'prompt', 'uc')):
+            texts[k] = v
     return texts
 
 
-def classify_png_texts(texts):
-    """PNGテキストのキーごとに種類を決める"""
-    novelai = texts.get('Software', '').startswith('NovelAI')
+def png_texts(data):
+    return _first_texts(png_text_items(data))
+
+
+def classify_png_texts(items):
+    """PNGテキストのキーごとに種類を決める。同じキーのどれかが生成情報なら、そのキーは生成情報にする"""
+    novelai = _first_texts(items).get('Software', '').startswith('NovelAI')
     groups = {}
-    for k, v in texts.items():
+    for k, v in items:
         if k == PNG_XMP_KEY:
-            groups[k] = 'xmp'
+            group = 'xmp'
         elif k in RAW_PROFILE_GROUPS:
-            groups[k] = RAW_PROFILE_GROUPS[k]
+            group = RAW_PROFILE_GROUPS[k]
         elif k in GEN_KEYS or (novelai and k in NOVELAI_KEYS) or (k == 'Comment' and _json_with(v, 'prompt', 'uc')):
-            groups[k] = 'gen'
+            group = 'gen'
         else:
-            groups[k] = 'other'
+            group = 'other'
+        if groups.get(k) != 'gen':
+            groups[k] = group
     return groups
+
+
+def _text_group(key, meta):
+    return meta.text_groups.get(key) or ('gen' if key in GEN_KEYS else 'other')
+
+
+def has_stealth(alpha):
+    """アルファ値（2次元配列）の最下位ビットに、生成情報の印があるか。ビットは列ごとに上から並ぶ"""
+    h, w = alpha.shape
+    bits = len(STEALTH_MAGICS[0]) * 8
+    if h * w < bits:
+        return False
+    head = alpha[:, :-(-bits // h)].T.ravel()[:bits] & 1
+    return np.packbits(head).tobytes() in STEALTH_MAGICS
+
+
+def scrub_alpha(alpha):
+    """アルファ値の最下位ビットの情報を消す。完全な不透明と完全な透明は変わらない"""
+    return np.where(alpha >= 128, alpha | 1, alpha & 0xFE).astype(np.uint8)
+
+
+def _has_stealth_image(im):
+    if 'A' not in im.getbands() or im.width * im.height > MAX_PIXELS:
+        return False
+    try:
+        return has_stealth(np.asarray(im.getchannel('A')))
+    except Exception:   # 画素が壊れている
+        return False
 
 
 def _as_text(value):
@@ -190,7 +294,7 @@ def _json_with(text, *keys):
 def _load_json(text):
     try:
         return json.loads(text)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None
 
 
@@ -198,6 +302,8 @@ def decode_user_comment(raw):
     """EXIF の UserComment（先頭8バイトが文字コード）を文字列にする"""
     if isinstance(raw, str):
         return raw.strip('\x00')
+    if not isinstance(raw, bytes):   # 型が仕様と違う細工されたファイル
+        return str(raw)
     head, body = raw[:8], raw[8:]
     if head.startswith(b'UNICODE'):
         # A1111 は UTF-16BE で書く。BE で読めなければ LE とみなす
@@ -229,20 +335,43 @@ def _read_exif(im, meta):
         return
     if not exif:
         return
-    items = [(ExifTags.TAGS.get(t, hex(t)), t, v) for t, v in exif.items() if t not in (EXIF_IFD, GPS_IFD)]
+    items = [(ExifTags.TAGS.get(t, hex(t)), t, v) for t, v in exif.items()
+             if t not in (EXIF_IFD, GPS_IFD, ORIENTATION)]
     items += [(ExifTags.TAGS.get(t, hex(t)), t, v) for t, v in exif.get_ifd(EXIF_IFD).items()]
     items += [(f'GPS {ExifTags.GPSTAGS.get(t, hex(t))}', t, v) for t, v in exif.get_ifd(GPS_IFD).items()]
     if exif.get_ifd(GPS_IFD):
         meta.notes.append('EXIF に位置情報（GPS）が含まれています')
     for name, tag, value in items:
         text = _exif_value(tag, value)
-        gen = parse_a1111(text) if tag in (USER_COMMENT, IMAGE_DESCRIPTION) else None
-        if gen is not None and meta.gen is None:
-            meta.gen = gen
+        gen = _exif_gen(tag, text)
+        if gen is not None:
+            if meta.gen is None or not meta.gen.prompt:
+                meta.gen = gen
             meta.exif_has_gen = True
             meta.entries.append(Entry('gen', f'EXIF {name}', text))
         else:
             meta.entries.append(Entry('exif', name, text))
+
+
+def _exif_gen(tag, text):
+    """EXIF の値が生成情報なら GenInfo を返す"""
+    if tag in (MAKE, MODEL):
+        if text.startswith('prompt:'):
+            return parse_comfy(_load_json(text[len('prompt:'):]))
+        return GenInfo('ComfyUI') if text.startswith(EXIF_GEN_PREFIXES) else None
+    if tag not in (USER_COMMENT, IMAGE_DESCRIPTION):
+        return None
+    gen = parse_a1111(text)
+    obj = None if gen else _load_json(text)
+    if not isinstance(obj, dict):
+        return gen
+    if 'uc' in obj:
+        return parse_novelai({'Comment': text})
+    if 'prompt' in obj:
+        return _parse_json_params(obj)
+    if any(isinstance(v, dict) and 'class_type' in v for v in obj.values()):
+        return parse_comfy(obj)
+    return None
 
 
 def _read_xmp(xmp, meta):
@@ -335,13 +464,34 @@ def parse_a1111(text):
     prompt = '\n'.join(body[:neg_at]).strip()
     negative = '\n'.join(body[neg_at:])[len('Negative prompt:'):].strip() if neg_at < len(body) else ''
     settings = {}
-    for key, value in _A1111_SETTING.findall(' '.join(lines[idx:])):
-        value = value.strip()
-        if value.startswith('"') and value.endswith('"'):
-            value = value[1:-1].replace('\\"', '"')
-        _setting(settings, key.strip(), value)
+    for key, value in _a1111_settings(' '.join(lines[idx:])):
+        _setting(settings, key, value)
     tool = 'Forge' if settings.get('バージョン', '').startswith('f') else 'A1111 WebUI'
     return GenInfo(tool, prompt, negative, settings)
+
+
+def _a1111_settings(line):
+    """設定の行を (名前, 値) に分ける。長い行でも時間が行の長さに比例するよう、前から1回だけ読む"""
+    pos, n = 0, len(line)
+    while pos < n:
+        colon = line.find(':', pos)
+        if colon < 0:
+            return
+        key = line[max(pos, line.rfind(',', pos, colon) + 1):colon].strip()
+        start = colon + 1
+        while start < n and line[start].isspace():
+            start += 1
+        quoted = _A1111_QUOTED.match(line, start)
+        if quoted:
+            value, end = quoted.group()[1:-1].replace('\\"', '"'), quoted.end()
+            comma = line.find(',', end)
+            pos = n if comma < 0 else comma + 1
+        else:
+            comma = line.find(',', start)
+            end = n if comma < 0 else comma
+            value, pos = line[start:end].strip(), end + 1
+        if _A1111_KEY.fullmatch(key):
+            yield key, value
 
 
 def _parse_json_params(obj):
@@ -361,26 +511,31 @@ def parse_comfy(graph):
     gen = GenInfo('ComfyUI')
     if not isinstance(graph, dict):
         return gen   # workflow だけの場合（画面の配置情報で、設定は読み取らない）
-    nodes = {k: v for k, v in graph.items() if isinstance(v, dict) and 'inputs' in v}
+    nodes = {k: v for k, v in graph.items() if isinstance(v, dict) and isinstance(v.get('inputs'), dict)}
 
-    def text_of(link, depth=0):
-        if not isinstance(link, list) or depth > 8 or str(link[0]) not in nodes:
+    def text_of(link, seen, depth=0):
+        """つながりをたどってテキストを探す。同じノードは1度しか見ない（循環や分岐の爆発を防ぐ）"""
+        if not isinstance(link, list) or not link or depth > 8:
             return ''
-        inputs = nodes[str(link[0])]['inputs']
+        node = str(link[0])
+        if node not in nodes or node in seen:
+            return ''
+        seen.add(node)
+        inputs = nodes[node]['inputs']
         for key in ('text', 'text_g', 'prompt', 'positive'):
             if isinstance(inputs.get(key), str):
                 return inputs[key]
             if isinstance(inputs.get(key), list):
-                return text_of(inputs[key], depth + 1)
+                return text_of(inputs[key], seen, depth + 1)
         # 条件の合成などは、最初につながっている入力をたどる
-        return next((t for v in inputs.values() if (t := text_of(v, depth + 1))), '')
+        return next((t for v in inputs.values() if (t := text_of(v, seen, depth + 1))), '')
 
-    sampler = next((n for n in nodes.values() if 'sampler' in n.get('class_type', '').lower()
+    sampler = next((n for n in nodes.values() if 'sampler' in str(n.get('class_type', '')).lower()
                     and 'positive' in n['inputs']), None)
     if sampler:
         inp = sampler['inputs']
-        gen.prompt = text_of(inp.get('positive'))
-        gen.negative = text_of(inp.get('negative'))
+        gen.prompt = text_of(inp.get('positive'), set())
+        gen.negative = text_of(inp.get('negative'), set())
         for k in ('seed', 'noise_seed', 'steps', 'cfg', 'sampler_name', 'scheduler', 'denoise'):
             if not isinstance(inp.get(k), list):
                 _setting(gen.settings, k, inp.get(k))
@@ -392,7 +547,7 @@ def parse_comfy(graph):
         for k in ('ckpt_name', 'unet_name'):
             if isinstance(inp.get(k), str):
                 _setting(gen.settings, k, inp[k])
-        if 'latent' in n.get('class_type', '').lower() and isinstance(inp.get('width'), int):
+        if 'latent' in str(n.get('class_type', '')).lower() and isinstance(inp.get('width'), int):
             _setting(gen.settings, 'size', f"{inp['width']}x{inp.get('height')}")
     return gen
 
@@ -459,20 +614,69 @@ def strip(data, remove, meta=None):
 
 def strip_file(src, dst, remove):
     data = Path(src).read_bytes()
-    Path(dst).write_bytes(strip(data, remove))
+    write_atomic(dst, strip(data, remove))
+
+
+def write_atomic(dst, data):
+    """一時ファイルに書いてから置き換える。途中で失敗しても、既にあるファイルは壊れない"""
+    dst = Path(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=dst.parent, prefix=f'.{dst.name}.', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+        os.replace(tmp, dst)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _load_exif(exif_bytes):
+    exif = Image.Exif()
+    exif.load(exif_bytes if exif_bytes.startswith(b'Exif') else b'Exif\x00\x00' + exif_bytes)
+    return exif
+
+
+def _exif_bytes(exif):
+    out = exif.tobytes()
+    return out[6:] if out.startswith(b'Exif\x00\x00') else out
 
 
 def _exif_without_gen(exif_bytes):
-    """生成情報の入った UserComment / ImageDescription だけを除いた EXIF（先頭の Exif\\0\\0 は付けない）"""
-    exif = Image.Exif()
-    exif.load(exif_bytes if exif_bytes.startswith(b'Exif') else b'Exif\x00\x00' + exif_bytes)
-    if IMAGE_DESCRIPTION in exif and parse_a1111(_exif_value(IMAGE_DESCRIPTION, exif[IMAGE_DESCRIPTION])):
-        del exif[IMAGE_DESCRIPTION]
+    """生成情報の入った項目だけを除いた EXIF（先頭の Exif\\0\\0 は付けない）"""
+    exif = _load_exif(exif_bytes)
+    for tag in (IMAGE_DESCRIPTION, MAKE, MODEL):
+        if tag in exif and _exif_gen(tag, _exif_value(tag, exif[tag])):
+            del exif[tag]
     ifd = exif.get_ifd(EXIF_IFD)
     if USER_COMMENT in ifd:
         del ifd[USER_COMMENT]
-    out = exif.tobytes()
-    return out[6:] if out.startswith(b'Exif\x00\x00') else out
+    return _exif_bytes(exif)
+
+
+def _orientation_exif(exif_bytes):
+    """向きだけを残した EXIF。向きの指定がなければ None（消すと画像が横倒しになるため残す）"""
+    try:
+        value = _load_exif(exif_bytes).get(ORIENTATION, 1)
+    except Exception:
+        return None
+    if value == 1:
+        return None
+    exif = Image.Exif()
+    exif[ORIENTATION] = value
+    return _exif_bytes(exif)
+
+
+def _only_orientation(exif_bytes):
+    try:
+        return set(_load_exif(exif_bytes)) <= {ORIENTATION}
+    except Exception:
+        return False
+
+
+def _rewritten_exif(body, action):
+    """action（'clean' / 'drop'）に応じて書き換えた EXIF。何も残らなければ None"""
+    return _exif_without_gen(body) if action == 'clean' else _orientation_exif(body)
 
 
 def _exif_action(remove, meta):
@@ -485,14 +689,14 @@ def _exif_action(remove, meta):
 def _iter_blocks(data, fmt):
     """ファイルを (種類, 中身) の並びに分ける。種類は消去の単位で、None は常に残すもの"""
     if fmt == 'PNG':
-        for ctype, body in _png_chunks(data):
-            yield {b'caBX': 'c2pa', b'eXIf': 'exif'}.get(ctype), body
+        for _ctype, body, kind in _png_blocks(data):
+            yield kind, body
     elif fmt == 'JPEG':
         for marker, body in _jpeg_segments(data):
             yield _jpeg_kind(marker, body), body
     elif fmt == 'WEBP':
         for fourcc, body in _webp_chunks(data):
-            yield {b'C2PA': 'c2pa', b'EXIF': 'exif', b'XMP ': 'xmp'}.get(fourcc), body
+            yield _webp_kind(fourcc), body
 
 
 # ---- PNG
@@ -509,48 +713,104 @@ def _safe(blocks):
         return
 
 
+_TRAILER = b''   # ファイルの終わりの印より後ろにある、形式に沿わないデータ
+_PNG_TEXT = (b'tEXt', b'zTXt', b'iTXt')
+# 画像の表示に必要なチャンク。これ以外の未知のチャンクは「その他」として消せるようにする
+_PNG_KEEP = {b'IHDR', b'PLTE', b'IDAT', b'IEND', b'tRNS', b'gAMA', b'cHRM', b'sRGB', b'iCCP', b'sBIT', b'cICP',
+             b'mDCV', b'cLLI', b'pHYs', b'bKGD', b'hIST', b'acTL', b'fcTL', b'fdAT'}
+
+
 def _png_chunks(data):
-    pos = 8
+    pos, ended = 8, False
     while pos + 8 <= len(data):
         length, ctype = struct.unpack('>I4s', data[pos:pos + 8])
         if pos + 12 + length > len(data):
+            if ended:
+                yield _TRAILER, data[pos:]
+                return
             raise BrokenFile('PNG のチャンクが途中で切れています')
         yield ctype, data[pos + 8:pos + 8 + length]
+        ended = ended or ctype == b'IEND'
         pos += 12 + length
+
+
+def _png_blocks(data):
+    """(チャンク名, 中身, 種類) の並び。IEND より後ろは表示に使われないので、テキスト以外は「その他」"""
+    ended = False
+    for ctype, body in _png_chunks(data):
+        if ctype in _PNG_TEXT:
+            kind = None
+        elif ctype == b'caBX':
+            kind = 'c2pa'
+        elif ctype == b'eXIf':
+            kind = 'exif'
+        else:
+            kind = None if ctype in _PNG_KEEP and not ended else 'other'
+        yield ctype, body, kind
+        ended = ended or ctype == b'IEND'
 
 
 def _png_chunk(ctype, body):
     return struct.pack('>I', len(body)) + ctype + body + struct.pack('>I', zlib.crc32(ctype + body) & 0xFFFFFFFF)
 
 
+def _png_raw(ctype, body):
+    return body if ctype == _TRAILER else _png_chunk(ctype, body)
+
+
+def _scrub_png_alpha(data):
+    """アルファ値の最下位ビットの情報を消す。画像データだけを作り直し、ほかのチャンクは保つ"""
+    with Image.open(io.BytesIO(data)) as im:
+        im.load()
+        bands = list(im.split())
+        bands[-1] = Image.fromarray(scrub_alpha(np.asarray(bands[-1])))
+        buf = io.BytesIO()
+        Image.merge(im.mode, bands).save(buf, 'PNG')
+    fresh = list(_png_chunks(buf.getvalue()))
+    ihdr = next(b for c, b in fresh if c == b'IHDR')
+    idat = [_png_chunk(c, b) for c, b in fresh if c == b'IDAT']
+    out, wrote = [data[:8]], False
+    for ctype, body in _png_chunks(data):
+        if ctype == b'IDAT':
+            if not wrote:
+                out += idat
+                wrote = True
+        elif ctype != b'sBIT':
+            out.append(_png_raw(ctype, ihdr if ctype == b'IHDR' else body))
+    return b''.join(out)
+
+
 def _strip_png(data, remove, meta):
+    if meta.stealth and 'gen' in remove:
+        data = _scrub_png_alpha(data)
     out = [data[:8]]
     action = _exif_action(remove, meta)
-    for ctype, body in _png_chunks(data):
-        if ctype in (b'tEXt', b'zTXt', b'iTXt'):
-            key = body.split(b'\x00', 1)[0].decode('latin-1')
-            if meta.text_groups.get(key, 'other') in remove:
+    for ctype, body, kind in _png_blocks(data):
+        if ctype in _PNG_TEXT:
+            if _text_group(body.split(b'\x00', 1)[0].decode('latin-1'), meta) in remove:
                 continue
-        elif ctype == b'caBX' and 'c2pa' in remove:
+        elif kind == 'exif' and action != 'keep':
+            body = _rewritten_exif(body, action)
+            if body is None:
+                continue
+        elif kind in remove:
             continue
-        elif ctype == b'eXIf':
-            if action == 'drop':
-                continue
-            if action == 'clean':
-                out.append(_png_chunk(ctype, _exif_without_gen(body)))
-                continue
-        out.append(_png_chunk(ctype, body))
+        out.append(_png_raw(ctype, body))
     return b''.join(out)
 
 
 # ---- JPEG
 
 _SOS, _EOI = 0xDA, 0xD9
+_JPEG_TRAILER = -1   # EOI より後ろのデータ（マーカーの代わりの印）
 _STANDALONE = {0x01, *range(0xD0, 0xD8)}   # 長さを持たないマーカー（TEM・RST）
+_NEXT_MARKER = re.compile(rb'\xff[^\x00\xd0-\xd7\xff]')   # 圧縮データの次のマーカー
 
 
 def _jpeg_segments(data):
-    """SOS より前のセグメントを (マーカー, 中身) で返す。SOS 以降は (SOS, 残り全部)"""
+    """セグメントを (マーカー, 中身) で返す。プログレッシブ JPEG のスキャンの間にあるものも含む
+    SOS の中身は圧縮データの終わりまで。EOI より後ろがあれば (_JPEG_TRAILER, 残り全部)
+    """
     pos = 2
     while pos < len(data):
         if data[pos] != 0xFF or pos + 1 >= len(data):
@@ -563,9 +823,17 @@ def _jpeg_segments(data):
             yield marker, b''
             pos += 2
             continue
-        if marker in (_SOS, _EOI):
-            yield marker, data[pos + 2:]
+        if marker == _EOI:
+            yield marker, b''
+            if pos + 2 < len(data):
+                yield _JPEG_TRAILER, data[pos + 2:]
             return
+        if marker == _SOS:
+            found = _NEXT_MARKER.search(data, pos + 2)
+            end = found.start() if found else len(data)
+            yield marker, data[pos + 2:end]
+            pos = end
+            continue
         if pos + 4 > len(data):
             raise BrokenFile('JPEG のセグメントが途中で切れています')
         length = struct.unpack('>H', data[pos + 2:pos + 4])[0]
@@ -576,13 +844,19 @@ def _jpeg_segments(data):
 
 
 def _jpeg_kind(marker, body):
+    """消去の単位。表示に要るもの（JFIF・ICC・Adobe の色変換・画像データ）は None で、未知の APP は「その他」"""
+    if marker == _JPEG_TRAILER:
+        return 'other'
     if marker == 0xE1 and body.startswith(b'Exif\x00'):
         return 'exif'
     if marker == 0xE1 and body.startswith(b'http://ns.adobe.com/'):
         return 'xmp'
     if marker == 0xEB and (b'jumb' in body[:64] or b'c2pa' in body[:64]):
         return 'c2pa'
-    if marker == 0xED or marker == 0xFE:   # Photoshop / IPTC、コメント
+    if (marker == 0xE0 and body.startswith(b'JFIF\x00')) or (marker == 0xE2 and body.startswith(b'ICC_PROFILE\x00')) \
+            or (marker == 0xEE and body.startswith(b'Adobe')):
+        return None
+    if 0xE0 <= marker <= 0xEF or marker == 0xFE:   # APP（Photoshop / IPTC など）、コメント
         return 'other'
     return None
 
@@ -595,18 +869,20 @@ def _strip_jpeg(data, remove, meta):
     out = [data[:2]]
     action = _exif_action(remove, meta)
     for marker, body in _jpeg_segments(data):
-        if marker in (_SOS, _EOI):
-            out.append(bytes([0xFF, marker]) + body)
-            break
-        if marker in _STANDALONE:
-            out.append(bytes([0xFF, marker]))
-            continue
         kind = _jpeg_kind(marker, body)
-        if kind == 'exif' and action != 'drop':
-            body = b'Exif\x00\x00' + _exif_without_gen(body) if action == 'clean' else body
-        elif kind in remove:
-            continue
-        out.append(_jpeg_segment(marker, body))
+        if marker == _JPEG_TRAILER:
+            if kind not in remove:
+                out.append(body)
+        elif marker in (_SOS, _EOI):
+            out.append(bytes([0xFF, marker]) + body)
+        elif marker in _STANDALONE:
+            out.append(bytes([0xFF, marker]))
+        elif kind == 'exif' and action != 'keep':
+            tiff = _rewritten_exif(body, action)
+            if tiff is not None:
+                out.append(_jpeg_segment(marker, b'Exif\x00\x00' + tiff))
+        elif kind not in remove:
+            out.append(_jpeg_segment(marker, body))
     return b''.join(out)
 
 
@@ -615,14 +891,27 @@ def _strip_jpeg(data, remove, meta):
 _VP8X_EXIF, _VP8X_XMP = 0x08, 0x04
 
 
+_WEBP_KEEP = {b'VP8X', b'VP8 ', b'VP8L', b'ALPH', b'ANIM', b'ANMF', b'ICCP'}   # 画像の表示に必要なもの
+
+
+def _webp_kind(fourcc):
+    if fourcc in _WEBP_KEEP:
+        return None
+    return {b'C2PA': 'c2pa', b'EXIF': 'exif', b'XMP ': 'xmp'}.get(fourcc, 'other')
+
+
 def _webp_chunks(data):
+    """チャンクを (名前, 中身) で返す。RIFF の範囲より後ろがあれば (_TRAILER, 残り全部)"""
     pos = 12
-    while pos + 8 <= len(data):
+    end = min(len(data), 8 + struct.unpack('<I', data[4:8])[0])
+    while pos + 8 <= end:
         fourcc, size = struct.unpack('<4sI', data[pos:pos + 8])
-        if pos + 8 + size > len(data):
+        if pos + 8 + size > end:
             raise BrokenFile('WebP のチャンクが途中で切れています')
         yield fourcc, data[pos + 8:pos + 8 + size]
         pos += 8 + size + (size & 1)
+    if end < len(data):
+        yield _TRAILER, data[end:]
 
 
 def _webp_chunk(fourcc, body):
@@ -630,12 +919,20 @@ def _webp_chunk(fourcc, body):
 
 
 def _strip_webp(data, remove, meta):
+    if meta.stealth and 'gen' in remove:
+        raise UnsupportedFormat('透明度に埋め込まれた生成情報は、WebP のままでは消せません。'
+                                '「ノイズ除去と背景の透過を反映する」で PNG として保存してください。')
     action = _exif_action(remove, meta)
-    chunks = []
+    chunks, trailer = [], b''
     for fourcc, body in _webp_chunks(data):
-        kind = {b'C2PA': 'c2pa', b'EXIF': 'exif', b'XMP ': 'xmp'}.get(fourcc)
-        if kind == 'exif' and action != 'drop':
-            body = _exif_without_gen(body) if action == 'clean' else body
+        kind = _webp_kind(fourcc)
+        if fourcc == _TRAILER:
+            trailer = b'' if kind in remove else body
+            continue
+        if kind == 'exif' and action != 'keep':
+            body = _rewritten_exif(body, action)
+            if body is None:
+                continue
         elif kind in remove:
             continue
         chunks.append((fourcc, body))
@@ -648,4 +945,4 @@ def _strip_webp(data, remove, meta):
             body = bytes([flags]) + body[1:]
         out.append(_webp_chunk(fourcc, body))
     payload = b'WEBP' + b''.join(out)
-    return b'RIFF' + struct.pack('<I', len(payload)) + payload
+    return b'RIFF' + struct.pack('<I', len(payload)) + payload + trailer

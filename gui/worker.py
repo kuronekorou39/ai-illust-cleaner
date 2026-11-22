@@ -181,8 +181,8 @@ def load_source(path):
     meta, rgb, alpha = load_image(path)
     try:
         info = md.read(path)
-    except Exception:   # メタデータが壊れていても、画像は開けるようにする
-        info = md.Metadata()
+    except Exception:   # メタデータが壊れていても、画像は開けるようにする（「なし」とは表示しない）
+        info = md.unreadable(path)
     return Source(str(path), rgb, alpha, meta, info)
 
 

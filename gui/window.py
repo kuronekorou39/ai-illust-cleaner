@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
         self.source = None
         self.result = None          # 最後に表示した全体処理の結果
         self._algos_key = None      # 4通りの比較で表示中のノイズの (画像, 表示方式)
-        self._save_choice = (True, None)   # 前回の保存の設定 (処理を反映するか, 消す種類)。None はすべて
+        self._save_choice = (True, frozenset())   # 前回の保存の設定 (処理を反映するか, 残すと選んだ種類)
         self._awaiting = False      # 現在の設定での全体処理の結果を待っているか
         self._analyzing = 0         # 実行中の指標計算の数
         self._toggles = ()          # 透過をクリックで反転させた位置（画像ごと）
@@ -375,12 +375,13 @@ class MainWindow(QMainWindow):
         """処理を反映するか、どの種類のメタデータを消すかを選んで保存する"""
         info = self.source.metadata
         ready = self.result is not None and not self._awaiting
-        apply, remove = self._save_choice
-        dlg = SaveDialog(self, info, ready, apply, remove)
+        apply, keep = self._save_choice
+        dlg = SaveDialog(self, info, ready, apply, keep)
         if not dlg.exec():
             return
         apply, remove = dlg.apply_processing(), dlg.selected()
-        self._save_choice = (apply, remove)
+        shown = set(dlg.boxes)   # この画像に無かった種類の選択は、前回のまま持ち越す
+        self._save_choice = (apply, frozenset((keep - shown) | (shown - remove)))
         src = Path(self.source.path)
         keep_format = not apply and info.strippable
         suffix = BATCH_SUFFIX if apply else NO_META_SUFFIX
@@ -388,6 +389,9 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, '保存', str(src.with_name(f'{src.stem}{suffix}{ext}')),
                                               f'{info.format if keep_format else "PNG"} (*{ext})')
         if not path:
+            return
+        if not keep_format and Path(path).suffix.lower() != '.png':
+            QMessageBox.warning(self, APP_NAME, '処理した画像は PNG で保存します。拡張子を .png にしてください。')
             return
         try:
             if apply:

@@ -104,7 +104,7 @@ class MetaDialog(_Dialog):
 class SaveDialog(_Dialog):
     """保存の設定：処理を反映するか、どの種類のメタデータを消すか"""
 
-    def __init__(self, parent, meta, processed_ready, apply=True, remove=None):
+    def __init__(self, parent, meta, processed_ready, apply=True, keep=()):
         super().__init__(parent, '保存', 500)
         self._meta = meta
 
@@ -127,7 +127,7 @@ class SaveDialog(_Dialog):
         for g, entries in groups.items():
             name, desc = md.GROUPS[g]
             box = QCheckBox(f'{name}（{len(entries)} 項目）')
-            box.setChecked(remove is None or g in remove)
+            box.setChecked(g not in keep)   # 残すと選んだことのない種類は、消す側で始める
             box.setCursor(Qt.PointingHandCursor)
             note = label(desc, 'small')
             note.setWordWrap(True)
@@ -178,6 +178,24 @@ class SaveDialog(_Dialog):
             text += '\nC2PA は署名が処理後の画像と合わなくなるため、反映するときは引き継ぎません。'
         self.note.setText(text)
 
+
+def batch_output(out_dir, src):
+    """一括処理の保存先。同じ名前のファイルがあれば、上書きせず番号を付ける"""
+    path = out_dir / f'{src.stem}{BATCH_SUFFIX}.png'
+    n = 2
+    while path.exists():
+        path = out_dir / f'{src.stem}{BATCH_SUFFIX} ({n}).png'
+        n += 1
+    return path
+
+
+def batch_sources(folder):
+    """一括処理の対象。以前の処理結果（元の画像が同じフォルダにある *_clean.png）は除く"""
+    def is_result(p):
+        return p.stem.endswith(BATCH_SUFFIX) and p.with_name(p.stem[:-len(BATCH_SUFFIX)] + p.suffix).exists()
+    return [p for p in sorted(folder.glob(BATCH_PATTERN)) if not is_result(p)]
+
+
 class BatchThread(QThread):
     progress = Signal(int, str)       # 完了した枚数、処理したファイル名
     finished_all = Signal(int, list)  # 成功した枚数、失敗の一覧
@@ -200,7 +218,7 @@ class BatchThread(QThread):
                 if p.cutout:
                     out, cut, _ = cutout(out, p.tolerance, p.holes)
                     alpha = merge_alpha(cut, alpha)
-                save_png(out, alpha, meta, self._out_dir / f'{src.stem}{BATCH_SUFFIX}.png', self._strip_meta)
+                save_png(out, alpha, meta, batch_output(self._out_dir, src), self._strip_meta)
                 ok += 1
             except Exception as e:
                 errors.append(f'{src.name}: {error_summary(e)}')
@@ -274,7 +292,7 @@ class BatchDialog(_Dialog):
 
     def _files(self):
         src = Path(self.src.text())
-        return sorted(src.glob(BATCH_PATTERN)) if self.src.text() and src.is_dir() else []
+        return batch_sources(src) if self.src.text() and src.is_dir() else []
 
     def _on_src(self):
         files = self._files()
