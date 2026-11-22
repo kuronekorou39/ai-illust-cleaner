@@ -42,6 +42,7 @@ uv run python -m cleaner.denoise 入力フォルダ 出力フォルダ       # �
 | `inspect_meta.py` | メタデータを種類ごとに表示する |
 | `visualize_noise.py` | ノイズの強度マップ・色ノイズ・周波数を1枚にまとめる |
 | `compare.py` | 処理前後のノイズと SSIM・PSNR を並べる |
+| `benchmark.py` | 他のノイズ除去手法と比べる（[docs/comparison.md](comparison.md) の数値と図） |
 | `gui_shot.py` | 画面のキャプチャを撮る（README の画像） |
 | `make_icon.py` | アプリのアイコンを `packaging/icon.ico` に書き出す |
 | `make_banner.py` | `docs/banner.png` を作る |

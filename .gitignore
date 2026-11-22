@@ -6,3 +6,5 @@ input/
 .pytest_cache/
 build/
 dist/
+research_notes/
+reports/
